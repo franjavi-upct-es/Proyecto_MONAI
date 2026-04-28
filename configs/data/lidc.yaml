@@ -1,7 +1,13 @@
-# LIDC-IDRI placeholder config. Filled in B5 (requires pylidc + raters
-# consensus on malignancy ratings). Used only by Phase 5.
+# LIDC-IDRI config for Phase 5 radiomics/classification.
 name: lidc
 root: data/raw/LIDC-IDRI
+
+# Phase 5 consumes a nodule-level manifest with columns:
+# patient_id,nodule_id,image,mask_gt,malignancy_median
+# Rows with median malignancy == 3 are discarded.
+manifest: data/processed/lidc/nodule_manifest.csv
+pred_masks_dir: data/processed/lidc/pred_masks
+n_folds: 5
 
 # Consensus rule for benign/malignant labelling on LIDC nodules:
 #   median rater malignancy >= 4  -> malignant
@@ -10,5 +16,3 @@ root: data/raw/LIDC-IDRI
 malignancy_consensus:
   malignant_min: 4
   benign_max: 2
-
-# B5 will fill the remaining fields (volumes, masks_dir, patient_grouping...).

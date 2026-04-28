@@ -8,6 +8,7 @@ val_every: 200
 patience: 10
 grad_accum_steps: 1
 log_every: 50
+fixed_iterations: true
 
 sweep:
   data_fraction: [0.25, 0.5, 1.0]

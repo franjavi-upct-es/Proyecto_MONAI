@@ -1,0 +1,18 @@
+# Root config for `python -m lungseg.cli train --config-name=sanity`.
+defaults:
+  - data: task06
+  - model: segresnet_lung
+  - training: sanity
+  - experiment: phase4_full
+  - _self_
+
+seed: 42
+fold: 0
+
+paths:
+  outputs: ${hydra:runtime.output_dir}
+  splits: data/splits
+
+hydra:
+  run:
+    dir: outputs/sanity/${now:%Y-%m-%d}/${now:%H-%M-%S}

@@ -1,13 +1,28 @@
-"""Typer CLI entrypoint with subcommands `train`, `predict`, `ablate`.
-
-The actual command bodies are filled in B4 (train/predict) and B6 (ablate).
-B1 only wires the surface so `python -m lungseg.cli --help` works.
-"""
+"""Typer CLI entrypoint for training, inference, ablation and classification."""
 
 from __future__ import annotations
 
-import typer
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Annotated
 
+import nibabel as nib
+import torch
+import typer
+from hydra import compose, initialize_config_dir
+from omegaconf import DictConfig, OmegaConf
+
+from lungseg.ablation import analyze, run_cell
+from lungseg.classification import evaluate_pipeline, evaluate_size_only
+from lungseg.data import build_loaders, build_val_transforms
+from lungseg.inference import predict_volume
+from lungseg.models import build_model
+from lungseg.radiomics import build_radiomic_dataset
+from lungseg.training import train_iters
+from lungseg.utils.logging import get_logger
+
+LOGGER = get_logger(__name__)
 app = typer.Typer(
     name="lungseg",
     help="Lung tumor segmentation & classification on MSD Task06_Lung.",
@@ -16,22 +31,136 @@ app = typer.Typer(
 )
 
 
-@app.command()
-def train(config_name: str = typer.Option("config", "--config-name")) -> None:
-    """Train a segmentation model. Implemented in B4."""
-    raise NotImplementedError("B4 will wire the iteration-based trainer.")
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _normalize_overrides(overrides: list[str] | None) -> list[str]:
+    normalized = []
+    append_keys = {"data_fraction", "aug_regime"}
+    for item in overrides or []:
+        key = item.split("=", 1)[0]
+        if key in append_keys:
+            normalized.append("+" + item)
+        else:
+            normalized.append(item)
+    return normalized
+
+
+def _compose_config(config_name: str, overrides: list[str] | None = None) -> DictConfig:
+    config_dir = str((_repo_root() / "configs").resolve())
+    normalized = _normalize_overrides(overrides)
+    with initialize_config_dir(config_dir=config_dir, version_base=None):
+        cfg = compose(config_name=config_name, overrides=normalized)
+    return _prepare_output_dir(cfg, config_name=config_name, overrides=normalized)
+
+
+def _prepare_output_dir(cfg: DictConfig, config_name: str, overrides: list[str]) -> DictConfig:
+    output_value = OmegaConf.select(cfg, "paths.outputs", default=None)
+    if output_value is None or "${hydra:" in str(output_value):
+        now = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
+        output_dir = _repo_root() / "outputs" / now
+        OmegaConf.update(cfg, "paths.outputs", str(output_dir), force_add=True)
+    else:
+        output_dir = Path(str(output_value))
+        if not output_dir.is_absolute():
+            output_dir = _repo_root() / output_dir
+        OmegaConf.update(cfg, "paths.outputs", str(output_dir), force_add=True)
+
+    hydra_dir = output_dir / ".hydra"
+    hydra_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, hydra_dir / "config.yaml", resolve=False)
+    (hydra_dir / "overrides.yaml").write_text(
+        "\n".join([f"- {item}" for item in overrides]) + ("\n" if overrides else ""),
+        encoding="utf-8",
+    )
+    (hydra_dir / "config_name.txt").write_text(config_name + "\n", encoding="utf-8")
+    return cfg
+
+
+def _save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
 @app.command()
-def predict(checkpoint: str = typer.Option(..., "--checkpoint")) -> None:
-    """Run sliding-window inference on a NIfTI volume. Implemented in B4."""
-    raise NotImplementedError("B4 will wire the inference command.")
+def train(
+    config_name: Annotated[str, typer.Option("--config-name")] = "config",
+    overrides: Annotated[list[str] | None, typer.Argument()] = None,
+) -> None:
+    """Train a segmentation model with an iteration-based loop."""
+    cfg = _compose_config(config_name, overrides)
+    model = build_model(cfg)
+    loaders = build_loaders(cfg, fold=int(cfg.fold), repo_root=_repo_root())
+    summary = train_iters(cfg, model, loaders)
+    LOGGER.info("training complete: best Dice=%s checkpoint=%s", summary["best_val_dice"], summary["checkpoint_path"])
 
 
 @app.command()
-def ablate(config_name: str = typer.Option("config", "--config-name")) -> None:
-    """Launch the Hydra-multirun ablation. Implemented in B6."""
-    raise NotImplementedError("B6 will wire the ablation runner.")
+def predict(
+    checkpoint: Annotated[str, typer.Option("--checkpoint")],
+    image: Annotated[str, typer.Option("--image")],
+    output: Annotated[str, typer.Option("--output")] = "prediction.nii.gz",
+    config_name: Annotated[str, typer.Option("--config-name")] = "config",
+    overrides: Annotated[list[str] | None, typer.Argument()] = None,
+) -> None:
+    """Run sliding-window inference on one NIfTI volume."""
+    cfg = _compose_config(config_name, overrides)
+    payload = torch.load(checkpoint, map_location="cpu")
+    if "cfg" in payload:
+        cfg = _prepare_output_dir(OmegaConf.create(payload["cfg"]), config_name=config_name, overrides=overrides or [])
+    model = build_model(cfg)
+    model.load_state_dict(payload["model_state_dict"])
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device).eval()
+
+    transform = build_val_transforms(cfg, with_label=False)
+    sample = transform({"image": image})
+    tensor = sample["image"].unsqueeze(0).to(device)
+    with torch.no_grad():
+        logits = predict_volume(model, tensor, cfg)
+        pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype("uint8")
+    affine = nib.load(image).affine
+    nib.save(nib.Nifti1Image(pred, affine), output)
+    LOGGER.info("prediction saved to %s", output)
+
+
+@app.command()
+def ablate(
+    config_name: Annotated[str, typer.Option("--config-name")] = "config",
+    overrides: Annotated[list[str] | None, typer.Argument()] = None,
+) -> None:
+    """Run one ablation cell and refresh the aggregate report."""
+    effective_overrides = ["experiment=phase6_ablation", *(overrides or [])]
+    cfg = _compose_config(config_name, effective_overrides)
+    result = run_cell(cfg)
+    report = analyze(Path(str(cfg.paths.outputs)))
+    LOGGER.info("ablation cell complete: %s", result["result_path"])
+    LOGGER.info("ablation report: %s", report)
+
+
+@app.command()
+def classify(
+    config_name: Annotated[str, typer.Option("--config-name")] = "config",
+    e2e: Annotated[bool, typer.Option("--e2e")] = False,
+    overrides: Annotated[list[str] | None, typer.Argument()] = None,
+) -> None:
+    """Run Phase 5 LIDC radiomics classification."""
+    effective_overrides = ["data=lidc", *(overrides or [])]
+    cfg = _compose_config(config_name, effective_overrides)
+    dataset = build_radiomic_dataset(cfg, e2e=e2e)
+    full = evaluate_pipeline(dataset["X"], dataset["y"], dataset["groups"], cfg)
+    volumes = dataset["table"].get("original_shape_VoxelVolume")
+    if volumes is None:
+        volume_candidates = dataset["table"].filter(like="VoxelVolume")
+        if volume_candidates.empty:
+            raise ValueError("size-only baseline requires a PyRadiomics VoxelVolume feature")
+        volumes = volume_candidates.iloc[:, 0]
+    size_only = evaluate_size_only(volumes.to_numpy(), dataset["y"], dataset["groups"])
+    result = {"full": full, "size_only": size_only, "n_nodules": len(dataset["y"])}
+    out_path = Path(str(cfg.paths.outputs)) / "classification_results.json"
+    _save_json(out_path, result)
+    LOGGER.info("classification results saved to %s", out_path)
 
 
 if __name__ == "__main__":
