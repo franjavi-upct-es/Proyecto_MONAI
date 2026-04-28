@@ -1,8 +1,43 @@
-.venv/
-.ruff_cache/
+# python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# venvs
+.venv/
+
+# caches & test
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# artifacts
+outputs/
+wandb/
+mlruns/
+*.pt
+*.pth
+*.ckpt
+*.nii
+*.nii.gz
+*.nrrd
+
+# data (raw + processed; splits NOT ignored — committed by B2)
+data/raw/
+data/processed/
+!src/data
+
+# OS / editor
 .DS_Store
 ._*
-data/
+.idea/
+.vscode/
+
+# claude config
 .claude/

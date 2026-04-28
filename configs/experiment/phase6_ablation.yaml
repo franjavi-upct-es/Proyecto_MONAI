@@ -1,0 +1,15 @@
+# Phase 6: data-fraction x augmentation x seed ablation.
+# Iterations per cell are FIXED across cells so comparisons are fair.
+# 10_000 chosen over the 50_000 of phase4_full as a budget compromise on
+# RTX 5060 8 GB (18 cells x 50_000 would be days; 18 cells x 10_000 fits).
+name: phase6_ablation
+max_iterations: 10000
+val_every: 200
+patience: 10
+grad_accum_steps: 1
+log_every: 50
+
+sweep:
+  data_fraction: [0.25, 0.5, 1.0]
+  aug_regime:    [none, standard]
+  seed:          [0, 1, 2]

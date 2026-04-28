@@ -1,0 +1,38 @@
+# MSD Task06_Lung dataset config.
+name: task06
+root: data/raw/Task06_Lung
+dataset_json: ${data.root}/dataset.json
+
+# Patient-level GroupKFold with rough volume-based stratification (B2).
+n_folds: 5
+splits_dir: data/splits
+
+# Resampled physical spacing (mm). XY isotropic, Z stable so 2.5D context has
+# consistent physical meaning across cases.
+target_spacing: [0.79, 0.79, 1.24]
+
+# HU clipping window for chest CT.
+# NOTE: a_max raised from 325 to 400 to retain calcified-rib and dense
+# soft-tissue signal at the lung apex. CLAUDE.md hard rule explicitly allows
+# this deviation when justified; revisit if it hurts segmentation of pure
+# soft-tissue tumors.
+hu_clip:
+  a_min: -1024
+  a_max: 400
+  b_min: 0.0
+  b_max: 1.0
+  clip: true
+
+# Cropping & sampler (B2 will materialize this into MONAI transforms).
+crop_foreground:
+  source_key: image
+  threshold: 0.1
+sampler:
+  pos: 2
+  neg: 1
+  num_samples: 4
+
+# Cache strategy.
+cache:
+  rate: 1.0           # 0.0 falls back to plain Dataset (less RAM, more I/O)
+  num_workers: 4

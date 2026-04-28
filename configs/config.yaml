@@ -1,0 +1,23 @@
+# Root Hydra config. Group defaults are composed below; CLI overrides win.
+defaults:
+  - data: task06
+  - model: segresnet_lung
+  - training: local_5060
+  - experiment: phase4_full
+  - _self_
+
+seed: 42
+fold: 0
+
+# Output dir for checkpoints, logs and per-run artefacts. Hydra will resolve
+# ${hydra:runtime.output_dir} to outputs/<date>/<time>/ at run time.
+paths:
+  outputs: ${hydra:runtime.output_dir}
+  splits: data/splits
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: outputs/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}

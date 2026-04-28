@@ -1,0 +1,14 @@
+# LIDC-IDRI placeholder config. Filled in B5 (requires pylidc + raters
+# consensus on malignancy ratings). Used only by Phase 5.
+name: lidc
+root: data/raw/LIDC-IDRI
+
+# Consensus rule for benign/malignant labelling on LIDC nodules:
+#   median rater malignancy >= 4  -> malignant
+#   median rater malignancy <= 2  -> benign
+#   median == 3                   -> discard
+malignancy_consensus:
+  malignant_min: 4
+  benign_max: 2
+
+# B5 will fill the remaining fields (volumes, masks_dir, patient_grouping...).

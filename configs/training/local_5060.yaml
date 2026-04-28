@@ -1,0 +1,24 @@
+# Local RTX 5060 8 GB profile.
+name: local_5060
+patch_size: [96, 96, 96]
+batch_size: 2
+num_workers: 4
+amp: true
+pin_memory: true
+
+optimizer:
+  name: adamw
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+
+scheduler:
+  name: poly
+  exp: 0.9
+
+augment_regime: standard       # one of: none, standard
+
+inference:
+  sw_batch_size: 4
+  overlap: 0.5
+  mode: gaussian
+  padding_mode: constant

@@ -1,0 +1,7 @@
+fraccion,regimen,nombre_regimen,n_train_casos,mejor_dice,mejor_epoca,tiempo_s,fast_dev_run
+0.25,1,Base,12,0.0,6,1476.8,False
+0.25,2,Fuerte,12,0.0,70,2123.7,False
+0.5,1,Base,25,0.1152,76,2407.9,False
+0.5,2,Fuerte,25,0.1124,70,2432.3,False
+1.0,1,Base,50,0.1272,68,3032.5,False
+1.0,2,Fuerte,50,0.138,70,3105.6,False

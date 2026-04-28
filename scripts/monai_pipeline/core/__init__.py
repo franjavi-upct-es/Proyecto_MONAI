@@ -1,3 +1,0 @@
-"""
-Configuracion y utilidades compartidas.
-"""

@@ -1,0 +1,21 @@
+# SegResNet 3D — DEFAULT model in this project.
+# MONAI 1.5.x SegResNet has NO deep_supervision; do not enable it here.
+name: segresnet
+spatial_dims: 3
+in_channels: 1
+out_channels: 2          # softmax + to_onehot_y in losses; bg + tumor
+init_filters: 16
+blocks_down: [1, 2, 2, 4]
+blocks_up: [1, 1, 1]
+dropout_prob: 0.2
+norm: instance
+act: relu
+
+# Loss & metric defaults paired with this model.
+loss:
+  name: dice_ce
+  to_onehot_y: true
+  softmax: true
+  include_background: false
+  lambda_dice: 1.0
+  lambda_ce: 1.0

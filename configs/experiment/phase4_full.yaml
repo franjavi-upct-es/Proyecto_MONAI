@@ -1,0 +1,7 @@
+# Phase 4: full training run on fold 0. Acceptance criterion: DSC >= 0.45.
+name: phase4_full
+max_iterations: 50000
+val_every: 500
+patience: 20            # number of validations without improvement before stop
+grad_accum_steps: 1
+log_every: 50
