@@ -8,6 +8,9 @@ exercise foreground sampling and intensity windowing on a known input.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import nibabel as nib
 import numpy as np
 import pytest
 
@@ -25,3 +28,24 @@ def synthetic_blob() -> dict[str, np.ndarray]:
     image[mask] = 50.0
     label[mask] = 1
     return {"image": image, "label": label}
+
+
+@pytest.fixture
+def synthetic_blob_paths(
+    tmp_path: Path, synthetic_blob: dict[str, np.ndarray]
+) -> dict[str, str]:
+    """Materialize the synthetic blob to NIfTI at the configured target spacing.
+
+    Spacing matches `cfg.data.target_spacing = (0.79, 0.79, 1.24)` so MONAI's
+    `Spacingd` is a near-no-op and downstream tests stay deterministic.
+    """
+    affine = np.eye(4, dtype=np.float64)
+    affine[0, 0] = 0.79
+    affine[1, 1] = 0.79
+    affine[2, 2] = 1.24
+
+    img_path = tmp_path / "image.nii.gz"
+    lbl_path = tmp_path / "label.nii.gz"
+    nib.save(nib.Nifti1Image(synthetic_blob["image"], affine), str(img_path))
+    nib.save(nib.Nifti1Image(synthetic_blob["label"].astype(np.uint8), affine), str(lbl_path))
+    return {"image": str(img_path), "label": str(lbl_path), "patient_id": "synthetic"}
