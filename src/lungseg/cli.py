@@ -55,8 +55,17 @@ def _compose_config(config_name: str, overrides: list[str] | None = None) -> Dic
     return _prepare_output_dir(cfg, config_name=config_name, overrides=normalized)
 
 
+def _raw_select(cfg: DictConfig, key: str, default=None):
+    value = OmegaConf.to_container(cfg, resolve=False)
+    for part in key.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return default
+        value = value[part]
+    return value
+
+
 def _prepare_output_dir(cfg: DictConfig, config_name: str, overrides: list[str]) -> DictConfig:
-    output_value = OmegaConf.select(cfg, "paths.outputs", default=None)
+    output_value = _raw_select(cfg, "paths.outputs", default=None)
     if output_value is None or "${hydra:" in str(output_value):
         now = datetime.now().strftime("%Y-%m-%d/%H-%M-%S")
         output_dir = _repo_root() / "outputs" / now

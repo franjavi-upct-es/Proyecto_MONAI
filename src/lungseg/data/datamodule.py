@@ -15,6 +15,9 @@ from omegaconf import DictConfig
 from lungseg.data.splits import REPO_ROOT
 from lungseg.data.transforms import build_train_transforms, build_val_transforms
 from lungseg.utils.seeds import seed_worker
+from lungseg.utils.logging import get_logger
+
+LOGGER = get_logger(__name__)
 
 
 def _load_fold(splits_dir: Path, fold: int, repo_root: Path) -> tuple[list[dict], list[dict]]:
@@ -52,20 +55,28 @@ def build_loaders(
     cache_workers = int(cfg.data.cache.num_workers)
 
     if cache_rate > 0.0:
-        train_ds = CacheDataset(
-            data=train_files,
-            transform=train_tf,
-            cache_rate=cache_rate,
-            num_workers=cache_workers,
-            copy_cache=False,
-        )
-        val_ds = CacheDataset(
-            data=val_files,
-            transform=val_tf,
-            cache_rate=cache_rate,
-            num_workers=cache_workers,
-            copy_cache=False,
-        )
+        try:
+            train_ds = CacheDataset(
+                data=train_files,
+                transform=train_tf,
+                cache_rate=cache_rate,
+                num_workers=cache_workers,
+                copy_cache=False,
+            )
+            val_ds = CacheDataset(
+                data=val_files,
+                transform=val_tf,
+                cache_rate=cache_rate,
+                num_workers=cache_workers,
+                copy_cache=False,
+            )
+        except PermissionError as exc:
+            LOGGER.warning(
+                "CacheDataset unavailable in this runtime (%s); falling back to uncached Dataset.",
+                exc,
+            )
+            train_ds = Dataset(data=train_files, transform=train_tf)
+            val_ds = Dataset(data=val_files, transform=val_tf)
     else:
         train_ds = Dataset(data=train_files, transform=train_tf)
         val_ds = Dataset(data=val_files, transform=val_tf)
