@@ -1,6 +1,6 @@
-"""Decorator-based registry for swapping models/losses via Hydra.
+"""Registro basado en decoradores para intercambiar modelos/pérdidas a través de Hydra.
 
-Usage (B3+):
+Uso (B3+):
 
     @register("model", "segresnet")
     def build_segresnet(cfg) -> torch.nn.Module: ...

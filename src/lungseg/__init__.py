@@ -1,4 +1,4 @@
-"""Lung tumor segmentation & classification on MSD Task06_Lung (MONAI 1.5+)."""
+"""Segmentación y clasificación de tumores de pulmón en MSD Task06_Lung (MONAI 1.5+)."""
 
 from __future__ import annotations
 

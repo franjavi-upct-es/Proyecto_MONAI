@@ -1,4 +1,4 @@
-"""Ablation runner driven by Hydra/CLI overrides."""
+"""Ejecutor de ablación impulsado por modificaciones de Hydra/CLI."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def _write_fractional_split(cfg: DictConfig, fraction: float, seed: int) -> Path
 
 
 def run_cell(cfg: DictConfig) -> dict:
-    """Run one ablation cell and write a JSON result."""
+    """Ejecuta una celda de ablación y escribe un resultado en formato JSON."""
     seed = int(_cell_value(cfg, "seed", 42))
     fraction = float(_cell_value(cfg, "data_fraction", 1.0))
     augment_regime = str(_cell_value(cfg, "aug_regime", _select(cfg, "training.augment_regime", "standard")))

@@ -30,6 +30,7 @@ mlruns/
 
 # data (raw + processed; splits NOT ignored — committed by B2)
 data/raw/
+data/cache/
 data/processed/
 !src/data
 

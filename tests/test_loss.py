@@ -1,4 +1,4 @@
-"""Loss, scheduler and model-factory tests."""
+"""Pruebas de pérdida, planificador y fábrica de modelos."""
 
 from __future__ import annotations
 

@@ -1,13 +1,13 @@
-"""CT-aware MONAI transforms for chest CT.
+"""Transformaciones MONAI específicas para TC de tórax.
 
-Recipe matches the refactor template:
-- HU clip [a_min, a_max] from cfg.data.hu_clip (a_max defaults to 400 here).
-- CropForegroundd via lung-air threshold.
-- Train sampler: RandCropByPosNegLabeld(pos=2, neg=1, num_samples=4).
-- Augmentations gated by cfg.training.augment_regime in {none, standard, aggressive}.
-- RandFlipd is only allowed on spatial_axis=2 (Z); flipping LR (axis=0) is
-  forbidden by CLAUDE.md and a defensive ValueError will be raised if a
-  config sneaks it in.
+La receta coincide con la plantilla de refactorización:
+- Recorte de HU [a_min, a_max] de cfg.data.hu_clip (a_max por defecto es 400 aquí).
+- CropForegroundd mediante umbral de aire en pulmón.
+- Muestreador de entrenamiento: RandCropByPosNegLabeld(pos=2, neg=1, num_samples=4).
+- Aumentos controlados por cfg.training.augment_regime en {none, standard, aggressive}.
+- RandFlipd solo está permitido en spatial_axis=2 (Z); voltear LR (eje=0) está
+  prohibido por CLAUDE.md y se lanzará un ValueError defensivo si una
+  configuración lo intenta introducir.
 """
 
 from __future__ import annotations
@@ -32,11 +32,12 @@ from monai.transforms import (
 from omegaconf import DictConfig
 
 KEYS = ["image", "label"]
+_CROP_METADATA_KEYS = ["foreground_start_coord", "foreground_end_coord"]
 _AUG_PROB = {"none": 0.0, "standard": 0.15, "aggressive": 0.30}
 
 
 def _check_no_lr_flip(transforms: list) -> None:
-    """Defensive guard against re-introducing the (c) bug from REPORT_DIAGNOSIS."""
+    """Guardia defensiva contra la reintroducción del error (c) de REPORT_DIAGNOSIS."""
     for tr in transforms:
         if isinstance(tr, RandFlipd):
             axis = tr.flipper.spatial_axis
@@ -115,11 +116,21 @@ def build_train_transforms(cfg: DictConfig) -> Compose:
         allow_smaller=True,
     )
     aug = _augmentations(prob)
-    transforms = [*pre, crop, *aug, EnsureTyped(keys=KEYS)]
+    transforms = [
+        *pre,
+        crop,
+        *aug,
+        EnsureTyped(keys=[*KEYS, *_CROP_METADATA_KEYS], allow_missing_keys=True),
+    ]
     _check_no_lr_flip(transforms)
     return Compose(transforms)
 
 
 def build_val_transforms(cfg: DictConfig, with_label: bool = True) -> Compose:
     keys = list(KEYS) if with_label else ["image"]
-    return Compose([*_pre_transforms(cfg, with_label=with_label), EnsureTyped(keys=keys)])
+    return Compose(
+        [
+            *_pre_transforms(cfg, with_label=with_label),
+            EnsureTyped(keys=[*keys, *_CROP_METADATA_KEYS], allow_missing_keys=True),
+        ]
+    )

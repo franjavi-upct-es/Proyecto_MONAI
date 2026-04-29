@@ -1,21 +1,20 @@
-# MSD Task06_Lung dataset config.
+# Configuración del dataset MSD Task06_Lung.
 name: task06
 root: data/raw/Task06_Lung
 dataset_json: ${data.root}/dataset.json
 
-# Patient-level GroupKFold with rough volume-based stratification (B2).
+# GroupKFold a nivel de paciente con estratificación aproximada basada en volumen (B2).
 n_folds: 5
 splits_dir: data/splits
 
-# Resampled physical spacing (mm). XY isotropic, Z stable so 2.5D context has
-# consistent physical meaning across cases.
+# Espaciado físico remuestreado (mm). XY isotrópico, Z estable para que el contexto 2.5D
+# tenga un significado físico consistente en todos los casos.
 target_spacing: [0.79, 0.79, 1.24]
 
-# HU clipping window for chest CT.
-# NOTE: a_max raised from 325 to 400 to retain calcified-rib and dense
-# soft-tissue signal at the lung apex. CLAUDE.md hard rule explicitly allows
-# this deviation when justified; revisit if it hurts segmentation of pure
-# soft-tissue tumors.
+# Ventana de recorte HU para CT de tórax.
+# NOTA: a_max se aumentó de 325 a 400 para retener la señal de costillas calcificadas y
+# tejido blando denso en el ápice pulmonar. Las reglas de CLAUDE.md permiten esta
+# desviación cuando está justificada; revisar si perjudica la segmentación de tumores de tejido blando puro.
 hu_clip:
   a_min: -1024
   a_max: 400
@@ -23,7 +22,7 @@ hu_clip:
   b_max: 1.0
   clip: true
 
-# Cropping & sampler (B2 will materialize this into MONAI transforms).
+# Recorte y muestreo (B2 materializará esto en transformaciones de MONAI).
 crop_foreground:
   source_key: image
   threshold: 0.1
@@ -32,7 +31,11 @@ sampler:
   neg: 1
   num_samples: 4
 
-# Cache strategy.
+# Estrategia de caché. Usando el modo 'disk' como punto medio: evita el error de RAM OOM
+# al almacenar las transformaciones procesadas en el SSD/HDD, mientras que sigue siendo
+# mucho más rápido que no usar ninguna caché.
 cache:
-  rate: 1.0           # 0.0 falls back to plain Dataset (less RAM, more I/O)
-  num_workers: 4
+  mode: disk          # disk evita RAM OOM; usa ram solo en máquinas con mucha memoria
+  rate: 1.0           # Cachear todos los archivos en disco tras el primer procesamiento
+  num_workers: 2      # workers usados para generar la caché
+  disk_dir: data/cache/monai

@@ -1,4 +1,4 @@
-"""Loss functions and the deep-supervision wrapper used with DynUNet."""
+"""Funciones de pérdida y el envoltorio de supervisión profunda utilizado con DynUNet."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from omegaconf import DictConfig
 
 
 def build_loss(cfg: DictConfig) -> torch.nn.Module:
-    """Build the segmentation loss from ``cfg.model.loss``."""
+    """Construye la pérdida de segmentación a partir de ``cfg.model.loss``."""
     loss_cfg = cfg.model.loss if "model" in cfg and "loss" in cfg.model else cfg.loss
     name = str(loss_cfg.get("name", "dice_ce")).lower()
     if name != "dice_ce":
-        raise ValueError(f"unknown loss.name={name!r}; only 'dice_ce' is supported")
+        raise ValueError(f"unknown loss.name={name!r}; solo se soporta 'dice_ce'")
     return DiceCELoss(
         include_background=bool(loss_cfg.get("include_background", False)),
         to_onehot_y=bool(loss_cfg.get("to_onehot_y", True)),
@@ -26,13 +26,13 @@ def build_loss(cfg: DictConfig) -> torch.nn.Module:
 
 def _normalized_weights(n_outputs: int, weights: list[float] | None) -> torch.Tensor:
     if n_outputs <= 0:
-        raise ValueError("deep supervision output stack must contain at least one output")
+        raise ValueError("la pila de salida de supervisión profunda debe contener al menos una salida")
     raw = weights if weights is not None else [0.5 ** (i + 1) for i in range(n_outputs)]
     if len(raw) != n_outputs:
-        raise ValueError(f"expected {n_outputs} deep-supervision weights, got {len(raw)}")
+        raise ValueError(f"se esperaban {n_outputs} pesos de supervisión profunda, se obtuvieron {len(raw)}")
     tensor = torch.as_tensor(raw, dtype=torch.float32)
     if torch.any(tensor < 0) or float(tensor.sum()) <= 0.0:
-        raise ValueError("deep-supervision weights must be non-negative and sum to > 0")
+        raise ValueError("los pesos de supervisión profunda deben ser no negativos y sumar > 0")
     return tensor / tensor.sum()
 
 
@@ -42,11 +42,11 @@ def deep_supervision_loss(
     base_loss,
     weights: list[float] | None = None,
 ) -> torch.Tensor:
-    """Apply ``base_loss`` over a DynUNet deep-supervision stack.
+    """Aplica ``base_loss`` sobre una pila de supervisión profunda de DynUNet.
 
-    DynUNet returns ``(B, n_ds, C, X, Y, Z)``. Lower-resolution outputs are
-    compared against nearest-neighbor resized labels, then combined with
-    normalized geometric weights.
+    DynUNet devuelve ``(B, n_ds, C, X, Y, Z)``. Las salidas de menor resolución se
+    comparan con etiquetas redimensionadas mediante el vecino más cercano, y luego se combinan con
+    pesos geométricos normalizados.
     """
     if out_stacked.dim() == target.dim() + 1:
         n_outputs = int(out_stacked.shape[1])

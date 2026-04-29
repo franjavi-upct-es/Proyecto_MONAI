@@ -1,4 +1,4 @@
-"""SegResNet 3D factory (default model in this project)."""
+"""Fábrica de SegResNet 3D (modelo por defecto en este proyecto)."""
 
 from __future__ import annotations
 
@@ -7,11 +7,11 @@ from omegaconf import DictConfig
 
 
 def build_segresnet(cfg: DictConfig):
-    """Build the MONAI SegResNet described by ``cfg.model``.
+    """Construye la SegResNet de MONAI descrita por ``cfg.model``.
 
-    MONAI 1.5.x SegResNet does not support deep supervision. Keeping the
-    guard here makes accidental config drift fail early instead of silently
-    changing the training contract.
+    La SegResNet de MONAI 1.5.x no admite supervisión profunda. Mantener la
+    guardia aquí hace que las derivaciones accidentales de la configuración fallen pronto en lugar de cambiar
+    silenciosamente el contrato de entrenamiento.
     """
     model_cfg = cfg.model if "model" in cfg else cfg
     if bool(model_cfg.get("deep_supervision", False)):

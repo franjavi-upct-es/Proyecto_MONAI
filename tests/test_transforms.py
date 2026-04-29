@@ -45,6 +45,8 @@ def test_train_patch_shape(synthetic_blob_paths: dict[str, str]) -> None:
     for s in samples:
         assert s["image"].shape == (1, 96, 96, 96), s["image"].shape
         assert s["label"].shape == (1, 96, 96, 96), s["label"].shape
+        assert hasattr(s["foreground_start_coord"], "numel")
+        assert hasattr(s["foreground_end_coord"], "numel")
 
 
 def test_pos_neg_sampling(synthetic_blob_paths: dict[str, str]) -> None:
@@ -75,5 +77,7 @@ def test_val_transforms_no_random(synthetic_blob_paths: dict[str, str]) -> None:
     val_tf = build_val_transforms(_cfg(augment_regime="aggressive"))
     out_a = val_tf(synthetic_blob_paths)
     out_b = val_tf(synthetic_blob_paths)
+    assert hasattr(out_a["foreground_start_coord"], "numel")
+    assert hasattr(out_a["foreground_end_coord"], "numel")
     np.testing.assert_array_equal(np.asarray(out_a["image"]), np.asarray(out_b["image"]))
     np.testing.assert_array_equal(np.asarray(out_a["label"]), np.asarray(out_b["label"]))

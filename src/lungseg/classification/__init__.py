@@ -1,8 +1,8 @@
-"""Classification pipelines (Phase 5).
+"""Pipelines de clasificación (Fase 5).
 
-NOTE: MSD Task06_Lung does NOT contain benign/malignant labels. The
-B/M-classification path requires `--dataset=lidc-idri` (B5) or a clinically
-meaningful proxy. The pipeline raises a clear error if invoked with Task06.
+NOTA: MSD Task06_Lung NO contiene etiquetas de benigno/maligno. El
+camino de clasificación B/M requiere `--dataset=lidc-idri` (B5) o un
+proxy clínicamente significativo. El pipeline lanza un error claro si se invoca con Task06.
 """
 
 from __future__ import annotations

@@ -1,10 +1,10 @@
-"""Patient-level GroupKFold splits with rough stratification by tumor volume.
+"""Divisiones GroupKFold a nivel de paciente con estratificación aproximada por volumen tumoral.
 
-Outputs deterministic `fold_{0..k-1}.json` files under `out_dir` containing
-per-case metadata so trainers in B4/B6 don't need to re-read NIfTI headers.
+Genera archivos `fold_{0..k-1}.json` deterministas bajo `out_dir` que contienen
+metadatos por caso para que los entrenadores en B4/B6 no necesiten volver a leer las cabeceras NIfTI.
 
-Stratification uses tertile bins of `tumor_volume_mm3`; with ~63 cases the
-three strata hold ~21 each, more than enough for `n_splits=5`.
+La estratificación utiliza contenedores de terciles de `tumor_volume_mm3`; con ~63 casos, los
+tres estratos contienen ~21 cada uno, más que suficiente para `n_splits=5`.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 @dataclass(frozen=True)
 class CaseRecord:
-    image: str          # path relative to repo root
-    label: str          # path relative to repo root
+    image: str          # ruta relativa a la raíz del repositorio
+    label: str          # ruta relativa a la raíz del repositorio
     patient_id: str
     tumor_volume_mm3: float
     stratum: int
@@ -39,8 +39,8 @@ class CaseRecord:
 
 
 def _resolve_relative(path_in_json: str, dataset_dir: Path) -> str:
-    """`dataset.json` paths look like './imagesTr/lung_001.nii.gz'.
-    Return path relative to REPO_ROOT for portability.
+    """Las rutas de `dataset.json` se ven como './imagesTr/lung_001.nii.gz'.
+    Devuelve la ruta relativa a REPO_ROOT para portabilidad.
     """
     abs_path = (dataset_dir / path_in_json.lstrip("./")).resolve()
     return str(abs_path.relative_to(REPO_ROOT))
@@ -55,7 +55,7 @@ def _compute_tumor_volume(label_abs: Path) -> float:
 
 
 def _assign_strata(volumes: np.ndarray) -> np.ndarray:
-    """Tertile binning. Returns int array in {0, 1, 2}."""
+    """Agrupación por terciles. Devuelve un array de enteros en {0, 1, 2}."""
     edges = np.percentile(volumes, [100 / 3.0, 200 / 3.0])
     return np.digitize(volumes, edges).astype(int)
 

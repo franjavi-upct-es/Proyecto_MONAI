@@ -1,10 +1,10 @@
-"""Determinism helpers.
+"""Ayudantes de determinismo.
 
-`set_global_determinism` wraps MONAI's `set_determinism` and exposes a
-`seed_worker` function suitable for `torch.utils.data.DataLoader`'s
-`worker_init_fn`. The legacy pipeline only called `set_determinism` at module
-import which did not propagate the seed to multiprocessing workers; B4 will
-hook these helpers into the trainer.
+`set_global_determinism` envuelve el `set_determinism` de MONAI y expone una
+función `seed_worker` adecuada para el `worker_init_fn` de `torch.utils.data.DataLoader`.
+La tubería heredada solo llamaba a `set_determinism` al importar el módulo,
+lo que no propagaba la semilla a los trabajadores de multiprocesamiento; B4
+conectará estos ayudantes al entrenador.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from monai.utils.misc import set_determinism
 
 
 def set_global_determinism(seed: int) -> None:
-    """Seed every RNG that touches the training stack."""
+    """Siembra cada RNG que toque la pila de entrenamiento."""
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -29,9 +29,9 @@ def set_global_determinism(seed: int) -> None:
 
 
 def seed_worker(worker_id: int) -> None:
-    """`worker_init_fn` for DataLoader workers. Derives the worker seed
-    from the parent's `torch.initial_seed()` so each worker is deterministic
-    yet uncorrelated with its siblings.
+    """`worker_init_fn` para los trabajadores del DataLoader. Deriva la semilla del trabajador
+    de la `torch.initial_seed()` del padre para que cada trabajador sea determinista
+    pero no esté correlacionado con sus hermanos.
     """
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)

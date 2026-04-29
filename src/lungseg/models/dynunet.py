@@ -1,4 +1,4 @@
-"""DynUNet 3D factory (optional model with deep-supervision support)."""
+"""Fábrica de DynUNet 3D (modelo opcional con soporte para supervisión profunda)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from omegaconf import DictConfig
 
 
 def build_dynunet(cfg: DictConfig):
-    """Build the MONAI DynUNet described by ``cfg.model``.
+    """Construye la DynUNet de MONAI descrita por ``cfg.model``.
 
-    With ``deep_supervision=True`` the forward pass returns
-    ``(B, n_ds, C, ...)`` and the final-resolution prediction is ``out[:, 0]``.
+    Con ``deep_supervision=True``, el paso hacia adelante devuelve
+    ``(B, n_ds, C, ...)`` y la predicción de resolución final es ``out[:, 0]``.
     """
     model_cfg = cfg.model if "model" in cfg else cfg
     filters = model_cfg.get("filters", None)

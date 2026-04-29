@@ -1,4 +1,4 @@
-"""Typer CLI entrypoint for training, inference, ablation and classification."""
+"""Punto de entrada de la CLI de Typer para entrenamiento, inferencia, ablación y clasificación."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from lungseg.utils.logging import get_logger
 LOGGER = get_logger(__name__)
 app = typer.Typer(
     name="lungseg",
-    help="Lung tumor segmentation & classification on MSD Task06_Lung.",
+    help="Segmentación y clasificación de tumores de pulmón en MSD Task06_Lung.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -97,7 +97,7 @@ def train(
     config_name: Annotated[str, typer.Option("--config-name")] = "config",
     overrides: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
-    """Train a segmentation model with an iteration-based loop."""
+    """Entrena un modelo de segmentación con un bucle basado en iteraciones."""
     cfg = _compose_config(config_name, overrides)
     model = build_model(cfg)
     loaders = build_loaders(cfg, fold=int(cfg.fold), repo_root=_repo_root())
@@ -113,7 +113,7 @@ def predict(
     config_name: Annotated[str, typer.Option("--config-name")] = "config",
     overrides: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
-    """Run sliding-window inference on one NIfTI volume."""
+    """Ejecuta inferencia de ventana deslizante en un volumen NIfTI."""
     cfg = _compose_config(config_name, overrides)
     payload = torch.load(checkpoint, map_location="cpu")
     if "cfg" in payload:
@@ -139,7 +139,7 @@ def ablate(
     config_name: Annotated[str, typer.Option("--config-name")] = "config",
     overrides: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
-    """Run one ablation cell and refresh the aggregate report."""
+    """Ejecuta una celda de ablación y actualiza el informe agregado."""
     effective_overrides = ["experiment=phase6_ablation", *(overrides or [])]
     cfg = _compose_config(config_name, effective_overrides)
     result = run_cell(cfg)
@@ -154,7 +154,7 @@ def classify(
     e2e: Annotated[bool, typer.Option("--e2e")] = False,
     overrides: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
-    """Run Phase 5 LIDC radiomics classification."""
+    """Ejecuta la clasificación de radiómica LIDC de la Fase 5."""
     effective_overrides = ["data=lidc", *(overrides or [])]
     cfg = _compose_config(config_name, effective_overrides)
     dataset = build_radiomic_dataset(cfg, e2e=e2e)
@@ -163,13 +163,13 @@ def classify(
     if volumes is None:
         volume_candidates = dataset["table"].filter(like="VoxelVolume")
         if volume_candidates.empty:
-            raise ValueError("size-only baseline requires a PyRadiomics VoxelVolume feature")
+            raise ValueError("la línea base de solo tamaño requiere una característica VoxelVolume de PyRadiomics")
         volumes = volume_candidates.iloc[:, 0]
     size_only = evaluate_size_only(volumes.to_numpy(), dataset["y"], dataset["groups"])
     result = {"full": full, "size_only": size_only, "n_nodules": len(dataset["y"])}
     out_path = Path(str(cfg.paths.outputs)) / "classification_results.json"
     _save_json(out_path, result)
-    LOGGER.info("classification results saved to %s", out_path)
+    LOGGER.info("resultados de clasificación guardados en %s", out_path)
 
 
 if __name__ == "__main__":

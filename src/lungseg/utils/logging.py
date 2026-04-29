@@ -1,4 +1,4 @@
-"""Logging helpers. W&B is optional and only activated when WANDB_API_KEY is set."""
+"""Ayudantes de registro (logging). W&B es opcional y solo se activa cuando se establece WANDB_API_KEY."""
 
 from __future__ import annotations
 

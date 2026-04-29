@@ -55,7 +55,7 @@ def synthetic_dataset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         img_rel = f"./imagesTr/{case_id}.nii.gz"
         lbl_rel = f"./labelsTr/{case_id}.nii.gz"
         _write_label(labels_dir / f"{case_id}.nii.gz", n_voxels=int(n_voxels))
-        # Image is just a copy of the label header (content irrelevant for splits).
+        # La imagen es solo una copia del encabezado de la etiqueta (contenido irrelevante para los splits).
         _write_label(images_dir / f"{case_id}.nii.gz", n_voxels=0)
         training_entries.append({"image": img_rel, "label": lbl_rel})
 

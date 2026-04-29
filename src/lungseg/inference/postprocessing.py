@@ -1,4 +1,4 @@
-"""Postprocessing: small-component removal and optional lung-mask gating."""
+"""Postprocesamiento: eliminación de componentes pequeños y filtrado opcional de máscara pulmonar."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from scipy import ndimage
 
 
 def remove_small_components(mask: np.ndarray, min_size: int) -> np.ndarray:
-    """Remove connected components smaller than ``min_size`` voxels."""
+    """Elimina los componentes conectados más pequeños que ``min_size`` vóxeles."""
     if min_size <= 0:
         return mask
     binary = np.asarray(mask).astype(bool)

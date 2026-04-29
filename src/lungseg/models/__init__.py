@@ -1,4 +1,4 @@
-"""Model factories used by the segmentation and classification stacks."""
+"""Fábricas de modelos utilizadas por las pilas de segmentación y clasificación."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ _BUILDERS = {
 
 
 def build_model(cfg: DictConfig) -> torch.nn.Module:
-    """Build the configured segmentation model."""
+    """Construye el modelo de segmentación configurado."""
     model_cfg = cfg.model if "model" in cfg else cfg
     name = str(model_cfg.get("name", "segresnet")).lower()
     try:

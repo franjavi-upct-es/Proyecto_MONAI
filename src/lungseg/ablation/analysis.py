@@ -1,4 +1,4 @@
-"""Ablation analysis: summaries, violin plots and Wilcoxon tests."""
+"""Análisis de ablación: resúmenes, gráficos de violín y pruebas de Wilcoxon."""
 
 from __future__ import annotations
 
@@ -76,13 +76,13 @@ def analyze(outputs_dir: Path) -> Path:
 
     report_path = outputs_dir / "REPORT_ABLATION.md"
     lines = [
-        "# REPORT_ABLATION",
+        "# INFORME_ABLACIÓN",
         "",
-        "## Summary",
+        "## Resumen",
         "",
         *_markdown_table(summary),
         "",
-        "## Wilcoxon paired tests",
+        "## Pruebas pareadas de Wilcoxon",
         "",
     ]
     if wilcoxon_rows:
@@ -91,7 +91,7 @@ def analyze(outputs_dir: Path) -> Path:
         for fraction, stat, p_value in wilcoxon_rows:
             lines.append(f"| {fraction:g} | {stat:.4g} | {p_value:.4g} |")
     else:
-        lines.append("Not enough matched seeds to run Wilcoxon tests.")
+        lines.append("No hay suficientes semillas emparejadas para ejecutar las pruebas de Wilcoxon.")
     lines.extend(["", f"- Summary CSV: `{summary_path}`"])
     if str(plot_path):
         lines.append(f"- Violin plot: `{plot_path}`")

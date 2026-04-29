@@ -1,4 +1,4 @@
-"""Sliding-window inference wrapper."""
+"""Envoltorio para inferencia por ventana deslizante."""
 
 from __future__ import annotations
 
@@ -8,11 +8,11 @@ from omegaconf import DictConfig
 
 
 def predict_volume(model: torch.nn.Module, image: torch.Tensor, cfg: DictConfig) -> torch.Tensor:
-    """Run MONAI sliding-window inference and normalize model output shape.
+    """Ejecuta la inferencia por ventana deslizante de MONAI y normaliza la forma de salida del modelo.
 
-    DynUNet with deep supervision returns ``(B, n_ds, C, ...)`` for each
-    window. Validation and inference always consume the final-resolution
-    prediction, ``out[:, 0]``.
+    DynUNet con supervisión profunda devuelve ``(B, n_ds, C, ...)`` para cada
+    ventana. La validación y la inferencia siempre consumen la predicción de
+    resolución final, ``out[:, 0]``.
     """
 
     def _predictor(window: torch.Tensor) -> torch.Tensor:

@@ -1,8 +1,10 @@
-# Local RTX 5060 8 GB profile.
+# Perfil para RTX 5060 8 GB local.
 name: local_5060
 patch_size: [96, 96, 96]
 batch_size: 2
-num_workers: 4
+# Punto medio: 2 workers proporcionan paralelismo sin la carga masiva de RAM
+# de tener 4-8 workers. La memoria anclada (pin_memory) acelera las transferencias a la GPU.
+num_workers: 2
 amp: true
 pin_memory: true
 

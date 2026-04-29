@@ -1,4 +1,4 @@
-"""Vanilla 3D UNet baseline."""
+"""Línea base de UNet 3D estándar (Vanilla)."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Bottleneck hook used by Phase 5 deep-feature experiments."""
+"""Gancho (hook) de cuello de botella utilizado por los experimentos de características profundas de la Fase 5."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import torch.nn.functional as functional
 
 
 def extract_bottleneck_features(model: torch.nn.Module, image: torch.Tensor) -> torch.Tensor:
-    """Return global-average pooled bottleneck features for a 3D model."""
+    """Devuelve las características del cuello de botella con promedio global (global-average pooled) para un modelo 3D."""
     was_training = model.training
     model.eval()
     with torch.no_grad():

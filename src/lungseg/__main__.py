@@ -1,4 +1,4 @@
-"""Allow `python -m lungseg` to dispatch to the typer CLI."""
+"""Permite que `python -m lungseg` despache a la CLI de typer."""
 
 from __future__ import annotations
 

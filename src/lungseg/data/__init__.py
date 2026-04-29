@@ -1,4 +1,4 @@
-"""Data loading, splits and transforms."""
+"""Carga de datos, divisiones y transformaciones."""
 
 from __future__ import annotations
 

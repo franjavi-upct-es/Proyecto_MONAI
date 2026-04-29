@@ -1,4 +1,4 @@
-"""Metric wrappers used by trainer and ablation analysis."""
+"""Envoltorios de métricas utilizados por el entrenador y el análisis de ablación."""
 
 from __future__ import annotations
 
@@ -46,11 +46,11 @@ def compute_segmentation_metrics(
     label: torch.Tensor | np.ndarray,
     spacing: Sequence[float] | None = None,
 ) -> dict[str, float]:
-    """Compute foreground Dice and HD95 for binary lung-tumor masks.
+    """Calcula el Dice de primer plano y HD95 para máscaras binarias de pulmón-tumor.
 
-    ``prediction`` may be logits/probabilities with two channels, a one-channel
-    probability map, or an already-binary mask. ``label`` is expected to be a
-    one-channel binary mask.
+    ``prediction`` puede ser logits/probabilidades con dos canales, un mapa de
+    probabilidad de un canal, o una máscara ya binaria. Se espera que ``label`` sea una
+    máscara binaria de un solo canal.
     """
     pred_bin = _to_binary_array(prediction)
     label_bin = _to_binary_array(label)

@@ -1,4 +1,4 @@
-"""Single-feature sanity baseline: classify on tumor VoxelVolume only."""
+"""Línea base de cordura de una sola característica: clasificar solo según el VoxelVolume del tumor."""
 
 from __future__ import annotations
 

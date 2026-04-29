@@ -1,4 +1,4 @@
-"""Sliding-window inference + postprocessing."""
+"""Inferencia de ventana deslizante y post-procesamiento."""
 
 from __future__ import annotations
 

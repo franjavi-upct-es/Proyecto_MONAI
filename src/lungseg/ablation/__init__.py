@@ -1,4 +1,4 @@
-"""Hydra/CLI ablation runner + analysis."""
+"""Ejecutor de ablación y análisis para Hydra/CLI."""
 
 from __future__ import annotations
 

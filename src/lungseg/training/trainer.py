@@ -1,4 +1,4 @@
-"""Iteration-based trainer (no epochs)."""
+"""Entrenador basado en iteraciones (sin épocas)."""
 
 from __future__ import annotations
 
@@ -144,11 +144,11 @@ def _save_checkpoint(
 
 
 def train_iters(cfg: DictConfig, model, loaders) -> dict:
-    """Train for a fixed number of optimizer iterations.
+    """Entrena durante un número fijo de iteraciones del optimizador.
 
-    ``global_step`` counts optimizer steps after gradient accumulation, not
-    dataloader epochs. Validation and early stopping are therefore independent
-    of dataset size.
+    ``global_step`` cuenta los pasos del optimizador después de la acumulación de gradientes, no
+    las épocas del cargador de datos. Por lo tanto, la validación y la detención temprana son independientes
+    del tamaño del conjunto de datos.
     """
     set_global_determinism(int(_select(cfg, "seed", 42)))
 

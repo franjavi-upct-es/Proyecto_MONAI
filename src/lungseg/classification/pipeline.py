@@ -1,4 +1,4 @@
-"""Radiomic classification pipelines for Phase 5."""
+"""Pipelines de clasificación radiómica para la Fase 5."""
 
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ def _positive_proba(model: Pipeline, X: np.ndarray) -> np.ndarray:
 
 
 def evaluate_pipeline(X: np.ndarray, y: np.ndarray, groups: np.ndarray, cfg: DictConfig) -> dict:
-    """Evaluate full radiomic models with patient-level grouped CV."""
+    """Evalúa modelos radiómicos completos con validación cruzada agrupada a nivel de paciente."""
     X = np.asarray(X, dtype=np.float32)
     y = np.asarray(y, dtype=np.int64)
     groups = np.asarray(groups)

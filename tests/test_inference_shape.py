@@ -1,4 +1,4 @@
-"""Inference and trainer smoke tests."""
+"""Pruebas de humo de inferencia y entrenador."""
 
 from __future__ import annotations
 
