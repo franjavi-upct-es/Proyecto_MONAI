@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import os
+
+# Optimizar gestión de memoria CUDA
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import json
 from datetime import datetime
 from pathlib import Path
@@ -136,9 +141,15 @@ def predict(
     sample = transform({"image": image})
     tensor = sample["image"].unsqueeze(0).to(device)
 
-    with torch.no_grad():
+    amp_enabled = bool(cfg.training.get("amp", False)) and device.type == "cuda"
+    amp_dtype = torch.bfloat16 if amp_enabled and torch.cuda.is_bf16_supported() else torch.float16
+    with torch.no_grad(), torch.autocast(
+        device_type="cuda",
+        dtype=amp_dtype,
+        enabled=amp_enabled,
+    ):
         logits = predict_volume(model, tensor, cfg)
-        pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype("uint8")
+    pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype("uint8")
 
     affine = nib.load(image).affine
     nib.save(nib.Nifti1Image(pred, affine), output)

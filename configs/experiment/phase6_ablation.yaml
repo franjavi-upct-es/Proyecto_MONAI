@@ -4,9 +4,9 @@
 # RTX 5060 8 GB (18 cells x 50_000 would be days; 18 cells x 10_000 fits).
 name: phase6_ablation
 max_iterations: 10000
-val_every: 200
+val_every: 100
 patience: 10
-grad_accum_steps: 1
+grad_accum_steps: 64
 log_every: 50
 fixed_iterations: true
 

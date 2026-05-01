@@ -9,17 +9,19 @@ resume_from: null
 
 optimizer:
   name: adamw
-  lr: 1.0e-4
+  lr: 4.0e-4
   weight_decay: 1.0e-5
 
 scheduler:
-  name: poly
-  exp: 0.9
+  name: cosine_warmup
+  warmup_steps: 500
 
 augment_regime: standard
 
 inference:
+  strategy: auto
+  roi_size: [224, 224]
   sw_batch_size: 1
-  overlap: 0.5
+  overlap: 0.25
   mode: gaussian
   padding_mode: constant

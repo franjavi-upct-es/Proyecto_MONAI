@@ -16,6 +16,8 @@ def build_vit_25d(cfg: DictConfig) -> ViT25D:
         out_channels=int(model_cfg.get("out_channels", 2)),
         encoder_name=str(model_cfg.get("encoder_name", "vit_base_patch16_224")),
         pretrained=bool(model_cfg.get("pretrained", True)),
+        chunk_size=int(model_cfg.get("chunk_size", 2)),
+        grad_checkpointing=bool(model_cfg.get("grad_checkpointing", False)),
     )
 
 

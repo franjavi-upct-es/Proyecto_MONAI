@@ -1,31 +1,47 @@
 # Perfil para RTX 5060 8 GB local.
 name: local_5060
-patch_size: [96, 96, 96]
+patch_size: [96, 96, 32]
 batch_size: 1
-# Punto medio: 2 workers proporcionan paralelismo sin la carga masiva de RAM
 num_workers: 2
+persistent_workers: true
+prefetch_factor: 2
 amp: true
 pin_memory: true
 resume_from: null
+
+# ESTRATEGIA DE MEMORIA:
+# Para un batch efectivo de 64 (muy recomendado para ViT):
+# Sube grad_accum_steps a 16 en el archivo del experimento.
+# CLI: python -m lungseg.cli train experiment.grad_accum_steps=16
+
+# Configuración de datos para cargar en RAM (CacheDataset)
+data:
+  cache:
+    mode: ram
+    rate: 0.8
+    num_workers: 4
 
 # Configuración de SSL y Fases
 unfreeze_epoch: -1
 unfreeze_lr_factor: 0.1
 val_every_epochs: 1
 
+
 optimizer:
   name: adamw
-  lr: 1.0e-4
+  lr: 4.0e-4
   weight_decay: 1.0e-5
 
 scheduler:
-  name: poly
-  exp: 0.9
+  name: cosine_warmup
+  warmup_steps: 500
 
 augment_regime: standard       # one of: none, standard
 
 inference:
-  sw_batch_size: 1
-  overlap: 0.5
+  strategy: auto
+  roi_size: [224, 224]
+  sw_batch_size: 2
+  overlap: 0.25
   mode: gaussian
   padding_mode: constant

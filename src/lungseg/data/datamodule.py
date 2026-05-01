@@ -106,80 +106,75 @@ def build_loaders(
     train_tf = build_train_transforms(cfg)
     val_tf = build_val_transforms(cfg)
 
-    cache_rate = float(_select(cfg, "data.cache.rate", 0.0) or 0.0)
-    cache_workers = int(_select(cfg, "data.cache.num_workers", 0) or 0)
+    cache_rate = float(_select(cfg, "data.cache.rate", 1.0))
+    cache_workers = int(_select(cfg, "data.cache.num_workers", 4))
     cache_mode = _cache_mode(cfg, cache_rate)
 
     if cache_mode == "none":
+        LOGGER.info("Using standard Dataset (no cache)")
         train_ds, val_ds = _plain_datasets(train_files, val_files, train_tf, val_tf)
     elif cache_mode == "disk":
+        # ... (mantener lógica de disk cache)
         cache_dir = _resolve_cache_dir(cfg, repo_root, fold)
         train_cache_dir = cache_dir / "train"
         val_cache_dir = cache_dir / "val"
         try:
             train_cache_dir.mkdir(parents=True, exist_ok=True)
             val_cache_dir.mkdir(parents=True, exist_ok=True)
-            train_ds = PersistentDataset(
-                data=train_files,
-                transform=train_tf,
-                cache_dir=train_cache_dir,
-            )
-            val_ds = PersistentDataset(
-                data=val_files,
-                transform=val_tf,
-                cache_dir=val_cache_dir,
-            )
+            train_ds = PersistentDataset(data=train_files, transform=train_tf, cache_dir=train_cache_dir)
+            val_ds = PersistentDataset(data=val_files, transform=val_tf, cache_dir=val_cache_dir)
             LOGGER.info("Using PersistentDataset disk cache at %s", cache_dir)
-        except OSError as exc:
-            LOGGER.warning(
-                "PersistentDataset cache unavailable at %s (%s); falling back to uncached Dataset.",
-                cache_dir,
-                exc,
-            )
+        except OSError:
             train_ds, val_ds = _plain_datasets(train_files, val_files, train_tf, val_tf)
-    elif cache_rate > 0.0:
+    else:
+        # CacheDataset por defecto para RAM con robustez
         try:
+            LOGGER.info("Using CacheDataset in RAM (rate=%.2f, workers=%d)", cache_rate, cache_workers)
             train_ds = CacheDataset(
                 data=train_files,
                 transform=train_tf,
                 cache_rate=cache_rate,
                 num_workers=cache_workers,
-                copy_cache=False,
+                copy_cache=False
             )
             val_ds = CacheDataset(
                 data=val_files,
                 transform=val_tf,
                 cache_rate=cache_rate,
                 num_workers=cache_workers,
-                copy_cache=False,
+                copy_cache=False
             )
-            LOGGER.info("Using CacheDataset in RAM with cache_rate=%.3f", cache_rate)
-        except PermissionError as exc:
+        except (PermissionError, RuntimeError, OSError) as exc:
             LOGGER.warning(
-                "CacheDataset unavailable in this runtime (%s); falling back to uncached Dataset.",
+                "CacheDataset failed (%s); falling back to uncached Dataset.",
                 exc,
             )
             train_ds, val_ds = _plain_datasets(train_files, val_files, train_tf, val_tf)
-    else:
-        LOGGER.warning(
-            "data.cache.mode=%s with data.cache.rate <= 0; using uncached Dataset.", cache_mode
-        )
-        train_ds, val_ds = _plain_datasets(train_files, val_files, train_tf, val_tf)
+
+    num_workers = int(_select(cfg, "training.num_workers", 4))
+    persistent_workers = bool(_select(cfg, "training.persistent_workers", False)) and num_workers > 0
+    prefetch_factor = (
+        int(_select(cfg, "training.prefetch_factor", 2)) if num_workers > 0 else None
+    )
 
     train_loader = DataLoader(
         train_ds,
         batch_size=int(cfg.training.batch_size),
         shuffle=True,
-        num_workers=int(cfg.training.num_workers),
-        pin_memory=bool(cfg.training.pin_memory),
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
         worker_init_fn=seed_worker,
     )
     val_loader = DataLoader(
         val_ds,
         batch_size=1,
         shuffle=False,
-        num_workers=int(cfg.training.num_workers),
-        pin_memory=bool(cfg.training.pin_memory),
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
         worker_init_fn=seed_worker,
     )
     return train_loader, val_loader

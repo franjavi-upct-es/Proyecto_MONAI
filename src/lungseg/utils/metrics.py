@@ -10,7 +10,17 @@ from scipy import ndimage
 
 
 def _to_binary_array(value: torch.Tensor | np.ndarray) -> np.ndarray:
-    arr = value.detach().cpu().numpy() if isinstance(value, torch.Tensor) else np.asarray(value)
+    if isinstance(value, torch.Tensor):
+        tensor = value.detach()
+        if tensor.ndim >= 5 and tensor.shape[1] > 1:
+            tensor = torch.argmax(tensor, dim=1, keepdim=True)
+        elif tensor.ndim >= 5 and tensor.shape[1] == 1:
+            tensor = tensor > 0.5
+        elif tensor.ndim == 4:
+            tensor = tensor[:, None] > 0.5
+        return tensor.cpu().numpy().astype(bool)
+
+    arr = np.asarray(value)
     if arr.ndim >= 5 and arr.shape[1] > 1:
         arr = np.argmax(arr, axis=1, keepdims=True)
     elif arr.ndim >= 5 and arr.shape[1] == 1:

@@ -57,10 +57,64 @@ def test_predict_volume_shape() -> None:
     assert out.shape == (1, 2, 16, 16, 16)
 
 
+def test_predict_volume_auto_bypasses_3d_sliding_window_for_vit25d() -> None:
+    cfg = _trainer_cfg(Path("/tmp"))
+    OmegaConf.update(cfg, "model.name", "vit_25d", force_add=True)
+    image = torch.ones(1, 1, 8, 8, 4)
+
+    class FakeSliceModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            self.calls += 1
+            assert x.shape == image.shape
+            return torch.zeros(x.shape[0], 2, *x.shape[2:])
+
+    model = FakeSliceModel()
+    out = predict_volume(model, image, cfg)
+    assert model.calls == 1
+    assert out.shape == (1, 2, 8, 8, 4)
+
+
+def test_predict_volume_auto_slides_vit25d_in_xy_only() -> None:
+    cfg = _trainer_cfg(Path("/tmp"))
+    OmegaConf.update(cfg, "model.name", "vit_25d", force_add=True)
+    image = torch.ones(1, 1, 16, 16, 5)
+
+    class FakeSliceModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            self.calls += 1
+            assert x.shape[-3:] == (8, 8, 5)
+            return torch.zeros(x.shape[0], 2, *x.shape[2:])
+
+    model = FakeSliceModel()
+    out = predict_volume(model, image, cfg)
+    assert model.calls == 4
+    assert out.shape == (1, 2, 16, 16, 5)
+
+
 def test_compute_segmentation_metrics_perfect_mask() -> None:
     label = torch.zeros(1, 1, 8, 8, 8)
     label[:, :, 2:6, 2:6, 2:6] = 1
     logits = torch.cat([1 - label, label], dim=1)
+    metrics = compute_segmentation_metrics(logits, label)
+    assert metrics["dice"] == 1.0
+    assert metrics["hd95"] == 0.0
+
+
+def test_compute_segmentation_metrics_accepts_bfloat16_logits() -> None:
+    label = torch.zeros(1, 1, 8, 8, 8)
+    label[:, :, 2:6, 2:6, 2:6] = 1
+    logits = torch.zeros(1, 2, 8, 8, 8, dtype=torch.bfloat16)
+    logits[:, 0] = 1
+    logits[:, 0, 2:6, 2:6, 2:6] = 0
+    logits[:, 1, 2:6, 2:6, 2:6] = 1
     metrics = compute_segmentation_metrics(logits, label)
     assert metrics["dice"] == 1.0
     assert metrics["hd95"] == 0.0

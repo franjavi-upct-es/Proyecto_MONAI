@@ -13,8 +13,7 @@ target_spacing: [0.79, 0.79, 1.24]
 
 # Ventana de recorte HU para CT de tórax.
 # NOTA: a_max se aumentó de 325 a 400 para retener la señal de costillas calcificadas y
-# tejido blando denso en el ápice pulmonar. Las reglas de CLAUDE.md permiten esta
-# desviación cuando está justificada; revisar si perjudica la segmentación de tumores de tejido blando puro.
+# tejido blando denso en el ápice pulmonar.
 hu_clip:
   a_min: -1024
   a_max: 400
@@ -27,15 +26,13 @@ crop_foreground:
   source_key: image
   threshold: 0.1
 sampler:
-  pos: 2
+  pos: 3
   neg: 1
   num_samples: 4
 
-# Estrategia de caché. Usando el modo 'disk' como punto medio: evita el error de RAM OOM
-# al almacenar las transformaciones procesadas en el SSD/HDD, mientras que sigue siendo
-# mucho más rápido que no usar ninguna caché.
+# Estrategia de caché. Usando el modo 'ram' para aprovechar la memoria del sistema.
 cache:
-  mode: disk          # disk evita RAM OOM; usa ram solo en máquinas con mucha memoria
-  rate: 1.0           # Cachear todos los archivos en disco tras el primer procesamiento
-  num_workers: 2      # workers usados para generar la caché
+  mode: ram
+  rate: 1.0
+  num_workers: 4
   disk_dir: data/cache/monai

@@ -26,20 +26,27 @@ class ViT25D(nn.Module):
         out_channels: int = 2,
         encoder_name: str = "vit_base_patch16_224",
         pretrained: bool = True,
+        chunk_size: int = 2,
+        grad_checkpointing: bool = False,
     ):
         super().__init__()
+        self.chunk_size = chunk_size
 
-        # El encoder se construye mediante timm. Ajusta automáticamente la primera capa
-        # si in_channels != 3 (p.ej., si es 1 para imágenes médicas).
-        # features_only=True permite extraer el feature map espacial antes del pooling global.
+        # El encoder se construye mediante timm.
         self.encoder = timm.create_model(
             encoder_name,
             pretrained=pretrained,
             in_chans=in_channels,
             features_only=True,
             out_indices=(-1,),
-            dynamic_img_size=True,  # Soporte para resoluciones dinámicas (pos_embed interpolation)
+            dynamic_img_size=True,
         )
+
+        if grad_checkpointing:
+            if hasattr(self.encoder, "set_grad_checkpointing"):
+                self.encoder.set_grad_checkpointing(True)
+            else:
+                self.encoder.grad_checkpointing = True
 
         # Obtener el embed_dim para conectar el decoder
         info = self.encoder.feature_info[-1]
@@ -60,11 +67,10 @@ class ViT25D(nn.Module):
             nn.Conv2d(16, out_channels, kernel_size=1),  # Salida
         )
 
-    def forward(self, x: torch.Tensor, chunk_size: int = 8) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
             x: Tensor volumétrico 3D de forma (B, C, H, W, D).
-            chunk_size: Tamaño del chunk para procesar slices 2D y evitar OOM.
         Returns:
             Tensor de segmentación 3D de forma (B, out_channels, H, W, D).
         """
@@ -81,8 +87,8 @@ class ViT25D(nn.Module):
         # Procesar por chunks para evitar OOM en GPUs con poca memoria (ej. P100 o T4)
         # Especialmente crítico si B*D es grande (ej. 2*96 = 192 slices)
         out_2d_list = []
-        for i in range(0, x_2d.shape[0], chunk_size):
-            x_chunk = x_2d[i : i + chunk_size]
+        for i in range(0, x_2d.shape[0], self.chunk_size):
+            x_chunk = x_2d[i : i + self.chunk_size]
 
             features = self.encoder(x_chunk)
             if isinstance(features, (list, tuple)):

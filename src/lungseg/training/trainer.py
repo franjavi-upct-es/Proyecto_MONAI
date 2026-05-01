@@ -17,7 +17,7 @@ from torch.amp import GradScaler
 
 from lungseg.inference import predict_volume
 from lungseg.training.losses import build_loss
-from lungseg.training.schedulers import build_poly_scheduler
+from lungseg.training.schedulers import build_cosine_warmup_scheduler, build_poly_scheduler
 from lungseg.utils.logging import get_logger, wandb_enabled
 from lungseg.utils.metrics import compute_segmentation_metrics
 from lungseg.utils.seeds import set_global_determinism
@@ -51,7 +51,9 @@ def _outputs_dir(cfg: DictConfig) -> Path:
 
 def _autocast_context(device: torch.device, enabled: bool):
     if device.type == "cuda" and enabled:
-        return torch.autocast(device_type="cuda", dtype=torch.float16)
+        # Priorizar bfloat16 en GPUs Blackwell/Ada si está habilitado
+        dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        return torch.autocast(device_type="cuda", dtype=dtype)
     return nullcontext()
 
 
@@ -75,10 +77,15 @@ def _make_optimizer(cfg: DictConfig, model: torch.nn.Module) -> torch.optim.Opti
     name = str(opt_cfg.get("name", "adamw")).lower()
     if name != "adamw":
         raise ValueError(f"unknown optimizer.name={name!r}; only 'adamw' is supported")
+
+    # Usar versión 'fused' para mayor velocidad en GPUs modernas
+    use_fused = torch.cuda.is_available() and hasattr(torch.optim.AdamW, "fused")
+
     return torch.optim.AdamW(
         model.parameters(),
         lr=float(opt_cfg.get("lr", 1.0e-4)),
         weight_decay=float(opt_cfg.get("weight_decay", 1.0e-5)),
+        fused=use_fused,
     )
 
 
@@ -174,7 +181,8 @@ def _validate(
 
     for batch in val_loader:
         image, label = _batch_to_device(batch, device)
-        logits = predict_volume(model, image, cfg)
+        with _autocast_context(device, bool(_select(cfg, "training.amp", False))):
+            logits = predict_volume(model, image, cfg)
         metrics = compute_segmentation_metrics(logits, label, spacing=spacing)
         dice_values.append(metrics["dice"])
         if math.isfinite(metrics["hd95"]):
@@ -253,13 +261,18 @@ class Trainer:
     ) -> None:
         set_global_determinism(int(_select(cfg, "seed", 42)))
 
+        if torch.cuda.is_available():
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            torch.backends.cudnn.benchmark = False  # Desactivado para ahorrar memoria en 8GB GPU
+
         self.cfg = cfg
         self.train_loader, self.val_loader = loaders
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model = model.to(self.device)
         self.model.train()
 
-        self.grad_accum_steps = max(_int_select(cfg, "experiment.grad_accum_steps", 1), 1)
+        self.grad_accum_steps = max(_int_select(cfg, "experiment.grad_accum_steps", 4), 1)
         self.steps_per_epoch = max(
             math.ceil(_loader_len(self.train_loader) / self.grad_accum_steps), 1
         )
@@ -271,6 +284,7 @@ class Trainer:
             ),
             1,
         )
+        self.val_every_steps = _int_select(cfg, "experiment.val_every", 0)
         self.log_every_steps = max(_int_select(cfg, "experiment.log_every", 50), 1)
         self.patience_epochs = max(_int_select(cfg, "experiment.patience", 20), 1)
         self.fixed_epochs = bool(
@@ -289,14 +303,27 @@ class Trainer:
             self._freeze_encoder()
 
         self.optimizer = _make_optimizer(cfg, self.model)
-        self.scheduler = build_poly_scheduler(
-            self.optimizer,
-            max_steps=self.max_steps,
-            exp=float(cfg.training.scheduler.get("exp", 0.9)),
-        )
+
+        scheduler_name = str(cfg.training.scheduler.get("name", "poly")).lower()
+        if scheduler_name == "cosine_warmup":
+            self.scheduler = build_cosine_warmup_scheduler(
+                self.optimizer,
+                max_steps=self.max_steps,
+                warmup_steps=int(cfg.training.scheduler.get("warmup_steps", 500)),
+            )
+        else:
+            self.scheduler = build_poly_scheduler(
+                self.optimizer,
+                max_steps=self.max_steps,
+                exp=float(cfg.training.scheduler.get("exp", 0.9)),
+            )
+
         self.base_loss = build_loss(cfg)
         self.amp_enabled = bool(cfg.training.get("amp", False)) and self.device.type == "cuda"
-        self.scaler = GradScaler("cuda", enabled=self.amp_enabled)
+
+        # bf16 no necesita GradScaler porque tiene el mismo rango que fp32
+        self.use_bf16 = self.amp_enabled and torch.cuda.is_bf16_supported()
+        self.scaler = GradScaler("cuda", enabled=(self.amp_enabled and not self.use_bf16))
 
         self.out_dir = _outputs_dir(cfg)
         self.ckpt_dir = self.out_dir / "checkpoints"
@@ -514,11 +541,80 @@ class Trainer:
                             }
                         )
 
-            should_validate = (
-                current_epoch + 1
-            ) % self.val_every_epochs == 0 or current_epoch == self.max_epochs - 1
-            mean_train_loss = running_loss / max(n_loss_terms, 1)
+                # VALIDACIÓN POR PASOS (Super-convergencia)
+                if self.val_every_steps > 0 and global_step % self.val_every_steps == 0:
+                    self.model.eval()
+                    mean_train_loss = running_loss / max(n_loss_terms, 1)
+                    last_metrics = _validate(self.cfg, self.model, self.val_loader, self.device)
+                    row = {
+                        "epoch": current_epoch,
+                        "step": global_step,
+                        "train_loss": mean_train_loss,
+                        "lr": float(self.optimizer.param_groups[0]["lr"]),
+                        "val_dice": last_metrics["val_dice"],
+                        "val_hd95": last_metrics["val_hd95"],
+                    }
+                    rows.append(row)
+                    _write_metrics_csv(self.metrics_path, rows)
+
+                    if self.wandb_run is not None:
+                        self.wandb_run.log(
+                            {
+                                "val/dice": last_metrics["val_dice"],
+                                "val/hd95": last_metrics["val_hd95"],
+                                "epoch": current_epoch,
+                                "step": global_step,
+                            }
+                        )
+
+                    if last_metrics["val_dice"] > best_dice:
+                        best_epoch, best_step, best_dice, best_hd95 = (
+                            current_epoch,
+                            global_step,
+                            last_metrics["val_dice"],
+                            last_metrics["val_hd95"],
+                        )
+                        stale_epochs = 0
+                        _save_checkpoint(
+                            self.best_ckpt,
+                            self.cfg,
+                            self.model,
+                            self.optimizer,
+                            self.scheduler,
+                            self.scaler,
+                            epoch=current_epoch,
+                            step=global_step,
+                            metrics=last_metrics,
+                            best_epoch=best_epoch,
+                            best_step=best_step,
+                            best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
+                            epochs_without_improvement=stale_epochs,
+                            unfreeze_done=self._unfreeze_done,
+                        )
+                    else:
+                        stale_epochs += 1
+
+                    self.model.train()
+
+                    if not self.fixed_epochs and stale_epochs >= self.patience_epochs:
+                        LOGGER.info("Early stopping agresivo en paso %d", global_step)
+                        return {
+                            "best_epoch": int(best_epoch),
+                            "best_val_dice": float(best_dice),
+                            "checkpoint_path": str(self.best_ckpt),
+                        }
+
+            is_final_epoch = current_epoch == self.max_epochs - 1
+            if self.val_every_steps > 0:
+                should_validate = is_final_epoch and global_step % self.val_every_steps != 0
+            else:
+                should_validate = (
+                    (current_epoch + 1) % self.val_every_epochs == 0 or is_final_epoch
+                )
+
             if should_validate:
+                self.model.eval()
+                mean_train_loss = running_loss / max(n_loss_terms, 1)
                 last_metrics = _validate(self.cfg, self.model, self.val_loader, self.device)
                 row = {
                     "epoch": current_epoch,
@@ -567,6 +663,8 @@ class Trainer:
                     )
                 else:
                     stale_epochs += self.val_every_epochs
+
+                self.model.train()
 
             _save_checkpoint(
                 self.last_ckpt,
