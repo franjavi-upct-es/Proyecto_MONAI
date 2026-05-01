@@ -14,15 +14,6 @@ from lungseg.training import train_iters
 from lungseg.utils.metrics import compute_segmentation_metrics
 
 
-class DeepSupervisionToy(torch.nn.Module):
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        bg = -x
-        fg = x
-        final = torch.cat([bg, fg], dim=1)
-        aux = final * 0.5
-        return torch.stack([final, aux], dim=1)
-
-
 def _trainer_cfg(tmp_path: Path):
     return OmegaConf.create(
         {
@@ -32,7 +23,7 @@ def _trainer_cfg(tmp_path: Path):
             "data": {"target_spacing": [1.0, 1.0, 1.0]},
             "model": {
                 "loss": {
-                    "name": "dice_ce",
+                    "name": "dice_focal",
                     "to_onehot_y": True,
                     "softmax": True,
                     "include_background": False,
@@ -58,12 +49,12 @@ def _trainer_cfg(tmp_path: Path):
     )
 
 
-def test_predict_volume_selects_final_deep_supervision_output() -> None:
+def test_predict_volume_shape() -> None:
     cfg = _trainer_cfg(Path("/tmp"))
     image = torch.ones(1, 1, 16, 16, 16)
-    out = predict_volume(DeepSupervisionToy(), image, cfg)
+    model = torch.nn.Conv3d(1, 2, kernel_size=1)
+    out = predict_volume(model, image, cfg)
     assert out.shape == (1, 2, 16, 16, 16)
-    assert torch.all(out[:, 1] == 1.0)
 
 
 def test_compute_segmentation_metrics_perfect_mask() -> None:
@@ -86,5 +77,11 @@ def test_train_iters_smoke_writes_checkpoint_and_metrics(tmp_path: Path) -> None
     summary = train_iters(cfg, model, (loader, loader))
     assert Path(summary["checkpoint_path"]).exists()
     assert Path(summary["metrics_path"]).exists()
+    checkpoint = torch.load(summary["last_checkpoint_path"], map_location="cpu")
+    # En el nuevo Trainer, step se incrementa cada vez que se llama a _optimizer_step
+    # Con 1 batch y grad_accum=1, step == epoch_idx + 1 al final de la época
+    # Si max_iterations=2 (épocas en el nuevo Trainer), step será 2.
+    assert checkpoint["step"] == 2
+    assert "scheduler_state_dict" in checkpoint
     payload = json.loads((tmp_path / "outputs" / "summary.json").read_text())
     assert payload["last_step"] == 2

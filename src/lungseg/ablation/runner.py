@@ -65,7 +65,9 @@ def _write_fractional_split(cfg: DictConfig, fraction: float, seed: int) -> Path
 
     active_dir = out_dir / f"active_frac_{fraction:g}_seed_{seed}"
     active_dir.mkdir(parents=True, exist_ok=True)
-    (active_dir / f"fold_{fold}.json").write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    (active_dir / f"fold_{fold}.json").write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
     return active_dir
 
 
@@ -73,7 +75,9 @@ def run_cell(cfg: DictConfig) -> dict:
     """Ejecuta una celda de ablación y escribe un resultado en formato JSON."""
     seed = int(_cell_value(cfg, "seed", 42))
     fraction = float(_cell_value(cfg, "data_fraction", 1.0))
-    augment_regime = str(_cell_value(cfg, "aug_regime", _select(cfg, "training.augment_regime", "standard")))
+    augment_regime = str(
+        _cell_value(cfg, "aug_regime", _select(cfg, "training.augment_regime", "standard"))
+    )
 
     cell_cfg = OmegaConf.create(OmegaConf.to_container(cfg, resolve=False))
     OmegaConf.update(cell_cfg, "seed", seed, merge=False)

@@ -1,13 +1,34 @@
 # Changelog
 
-Este documento combina dos capas de historia:
+## [Sin publicar]
 
-- Desde el 2026-04-27, la historia versionada real del repositorio Git.
-- Antes de eso, el historial experimental preservado en el changelog original,
-  útil para entender por que el proyecto pivoto varias veces antes del reset a
-  `src/lungseg/`.
+### Fixes y mejoras
 
-Para seguir documentando progreso, añade primero los cambios en `Sin publicar`
+- **Dependencias**: Se fijó la versión de `Pillow==10.4.0` en los requisitos de instalación al detectar GPUs P100 (`P100_TORCH_REQUIREMENTS`) en los notebooks y scripts de Kaggle para evitar el error `ImportError: cannot import name '_Ink' from 'PIL._typing'` causado por incompatibilidad con las versiones más recientes de Pillow.
+
+### Refactor a 2.5D Slice-wise y limpieza de legacy
+
+- **Arquitectura**: Transición de modelos volumétricos 3D pesados (SegResNet, SwinUNETR) a un enfoque `2.5D Slice-wise` (`ViT25D`) que trata el eje de profundidad como tamaño de batch, habilitando el uso de Transformers de Visión (ViT) preentrenados (MAE/DINO) vía `timm` con requisitos de VRAM drásticamente menores.
+- **Limpieza de Legacy**: Eliminados `vit_ssl`, `hybrid_ensemble` y `segresnet` originales para mantener un único camino principal eficiente en memoria.
+- **Actualización de flujos**: Actualizados configs (`vit_25d_lung.yaml`), tests y notebooks para reflejar la nueva arquitectura.
+
+## 2026-04-30 (commits recientes)
+
+
+### Refactorización SSL y Limpieza de Legacy (Arquitecto ML)
+
+- **SSL & Transformers**: Implementación de `ViTSSL` (SwinUNETR) con lógica avanzada de carga de pesos de encoders SSL (MAE/DINO), filtrado de decoders y mapeo dinámico de capas.
+- **Hybrid Ensemble**: Nuevo modelo `HybridEnsemble` que fusiona mapas de características latentes de ramas CNN (SegResNet) y ViT mediante bloques de convolución 3D y concatenación de cuellos de botella.
+- **Estrategia de Entrenamiento**: Refactorización del `Trainer` para soportar entrenamiento en dos fases (Freeze/Unfreeze) basado en épocas, con ajuste automático de Learning Rate.
+- **Optimización de Pérdidas**: Migración completa a `DiceFocalLoss` con hiperparámetros optimizados para segmentación de texturas difíciles y desbalance de clases.
+- **Eliminación de Código Legacy**:
+    - Eliminados modelos obsoletos: `DynUNet`, `UNet (Vanilla)` y `feature_extractor.py`.
+    - Eliminadas dependencias de supervisión profunda y lógica de parches legacy en la inferencia.
+    - Limpieza de scripts de diagnóstico y depuración temporal (`repro_bug.py`, `REPORT_DIAGNOSIS.md`).
+    - Actualización de configuraciones YAML para los nuevos modelos SSL e Híbridos.
+
+## [1.2.0] - 2026-04-29
+
 y, al cerrar una tanda, mueve ese bloque a una fecha concreta con los commits
 asociados.
 

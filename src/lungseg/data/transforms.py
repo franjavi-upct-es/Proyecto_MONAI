@@ -12,6 +12,8 @@ La receta coincide con la plantilla de refactorización:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from monai.transforms import (
     Compose,
     CropForegroundd,
@@ -79,12 +81,18 @@ def _pre_transforms(cfg: DictConfig, with_label: bool = True) -> list:
     ]
 
 
-def _augmentations(prob: float) -> list:
+def _rotate90_augmentation(prob: float, patch_size: Sequence[int]) -> list:
+    if len(patch_size) < 2 or int(patch_size[0]) == int(patch_size[1]):
+        return [RandRotate90d(keys=KEYS, prob=prob, max_k=3, spatial_axes=(0, 1))]
+    return []
+
+
+def _augmentations(prob: float, patch_size: Sequence[int]) -> list:
     if prob <= 0.0:
         return []
     return [
         RandFlipd(keys=KEYS, prob=prob, spatial_axis=2),
-        RandRotate90d(keys=KEYS, prob=prob, max_k=3, spatial_axes=(0, 1)),
+        *_rotate90_augmentation(prob, patch_size),
         RandGaussianNoised(keys=["image"], prob=prob, mean=0.0, std=0.02),
         RandGaussianSmoothd(
             keys=["image"],
@@ -115,7 +123,7 @@ def build_train_transforms(cfg: DictConfig) -> Compose:
         image_threshold=0.0,
         allow_smaller=True,
     )
-    aug = _augmentations(prob)
+    aug = _augmentations(prob, cfg.training.patch_size)
     transforms = [
         *pre,
         crop,

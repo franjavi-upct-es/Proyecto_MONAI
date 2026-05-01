@@ -1,7 +1,7 @@
 # Root config for `python -m lungseg.cli train --config-name=sanity`.
 defaults:
   - data: task06
-  - model: segresnet_lung
+  - model: vit_25d_lung
   - training: sanity
   - experiment: phase4_full
   - _self_

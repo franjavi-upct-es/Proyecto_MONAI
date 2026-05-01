@@ -31,9 +31,7 @@ def synthetic_blob() -> dict[str, np.ndarray]:
 
 
 @pytest.fixture
-def synthetic_blob_paths(
-    tmp_path: Path, synthetic_blob: dict[str, np.ndarray]
-) -> dict[str, str]:
+def synthetic_blob_paths(tmp_path: Path, synthetic_blob: dict[str, np.ndarray]) -> dict[str, str]:
     """Materialize the synthetic blob to NIfTI at the configured target spacing.
 
     Spacing matches `cfg.data.target_spacing = (0.79, 0.79, 1.24)` so MONAI's

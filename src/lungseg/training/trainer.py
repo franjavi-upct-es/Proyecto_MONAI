@@ -1,12 +1,12 @@
-"""Entrenador basado en iteraciones (sin épocas)."""
+# src/lungseg/training/trainer.py
+"""Entrenador principal epoch-based con soporte para estrategias de Freeze/Unfreeze SSL."""
 
 from __future__ import annotations
 
 import csv
-import itertools
 import json
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -16,7 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.amp import GradScaler
 
 from lungseg.inference import predict_volume
-from lungseg.training.losses import build_loss, deep_supervision_loss
+from lungseg.training.losses import build_loss
 from lungseg.training.schedulers import build_poly_scheduler
 from lungseg.utils.logging import get_logger, wandb_enabled
 from lungseg.utils.metrics import compute_segmentation_metrics
@@ -27,14 +27,17 @@ LOGGER = get_logger(__name__)
 
 def _select(cfg: DictConfig, key: str, default: Any = None) -> Any:
     try:
-        value = OmegaConf.select(cfg, key, default=default)
+        return OmegaConf.select(cfg, key, default=default)
     except Exception:
         return default
-    return value
 
 
-def _int_knob(cfg: DictConfig, key: str, default: int) -> int:
+def _int_select(cfg: DictConfig, key: str, default: int) -> int:
     return int(_select(cfg, key, default))
+
+
+def _float_select(cfg: DictConfig, key: str, default: float) -> float:
+    return float(_select(cfg, key, default))
 
 
 def _outputs_dir(cfg: DictConfig) -> Path:
@@ -58,10 +61,13 @@ def _model_output_for_loss(output: torch.Tensor | tuple | list) -> torch.Tensor:
     return output
 
 
-def _batch_to_device(batch: dict[str, Any], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
-    image = batch["image"].to(device, non_blocking=True)
-    label = batch["label"].to(device, non_blocking=True)
-    return image, label
+def _batch_to_device(
+    batch: dict[str, Any], device: torch.device
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return (
+        batch["image"].to(device, non_blocking=True),
+        batch["label"].to(device, non_blocking=True),
+    )
 
 
 def _make_optimizer(cfg: DictConfig, model: torch.nn.Module) -> torch.optim.Optimizer:
@@ -76,11 +82,82 @@ def _make_optimizer(cfg: DictConfig, model: torch.nn.Module) -> torch.optim.Opti
     )
 
 
-def _make_train_iter(train_loader: Iterable, cfg: DictConfig) -> Iterable:
-    if bool(_select(cfg, "training.sanity.overfit_one_batch", False)):
-        first_batch = next(iter(train_loader))
-        return itertools.repeat(first_batch)
-    return itertools.cycle(train_loader)
+def _finite_or_none(value: float) -> float | None:
+    return float(value) if math.isfinite(float(value)) else None
+
+
+def _loader_len(loader: Iterable) -> int:
+    try:
+        return max(len(loader), 1)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise ValueError(
+            "el entrenamiento por épocas requiere un train_loader con len() definido"
+        ) from exc
+
+
+def _resolve_resume_path(raw_path: str, out_dir: Path) -> Path:
+    if raw_path.lower() in {"last", "best"}:
+        return out_dir / "checkpoints" / f"{raw_path.lower()}.pt"
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    return path
+
+
+def _optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.device) -> None:
+    for state in optimizer.state.values():
+        for key, value in list(state.items()):
+            if isinstance(value, torch.Tensor):
+                state[key] = value.to(device)
+
+
+def _write_metrics_csv(path: Path, rows: list[dict[str, float | int]]) -> None:
+    if not rows:
+        return
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def _read_metrics_csv(path: Path, max_step: int | None = None) -> list[dict[str, float | int]]:
+    if not path.exists():
+        return []
+
+    rows: list[dict[str, float | int]] = []
+    with path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            step = int(float(row["step"]))
+            if max_step is not None and step > max_step:
+                continue
+            rows.append(
+                {
+                    "epoch": int(float(row.get("epoch", 0))),
+                    "step": step,
+                    "train_loss": float(row["train_loss"]),
+                    "lr": float(row["lr"]),
+                    "val_dice": float(row["val_dice"]),
+                    "val_hd95": float(row["val_hd95"]),
+                }
+            )
+    return rows
+
+
+def _best_from_rows(rows: list[dict[str, float | int]]) -> tuple[int, int, float, float]:
+    best_epoch = 0
+    best_step = 0
+    best_dice = -1.0
+    best_hd95 = float("nan")
+
+    for row in rows:
+        dice = float(row["val_dice"])
+        if dice > best_dice:
+            best_epoch = int(row["epoch"])
+            best_step = int(row["step"])
+            best_dice = dice
+            best_hd95 = float(row["val_hd95"])
+
+    return best_epoch, best_step, best_dice, best_hd95
 
 
 @torch.no_grad()
@@ -91,9 +168,9 @@ def _validate(
     device: torch.device,
 ) -> dict[str, float]:
     model.eval()
+    spacing = _select(cfg, "data.target_spacing", None)
     dice_values: list[float] = []
     hd95_values: list[float] = []
-    spacing = _select(cfg, "data.target_spacing", None)
 
     for batch in val_loader:
         image, label = _batch_to_device(batch, device)
@@ -110,212 +187,432 @@ def _validate(
     }
 
 
-def _write_metrics_csv(path: Path, rows: list[dict[str, float | int]]) -> None:
-    if not rows:
-        return
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def _finite_or_none(value: float) -> float | None:
-    return float(value) if math.isfinite(float(value)) else None
-
-
 def _save_checkpoint(
     path: Path,
     cfg: DictConfig,
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    scaler: GradScaler,
+    *,
+    epoch: int,
     step: int,
     metrics: dict[str, float],
+    best_epoch: int,
+    best_step: int,
+    best_metrics: dict[str, float],
+    epochs_without_improvement: int,
+    unfreeze_done: bool,
 ) -> None:
     torch.save(
         {
-            "step": step,
+            "epoch": int(epoch),
+            "step": int(step),
             "metrics": metrics,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+            "scaler_state_dict": scaler.state_dict(),
+            "best_epoch": int(best_epoch),
+            "best_step": int(best_step),
+            "best_metrics": best_metrics,
+            "epochs_without_improvement": int(epochs_without_improvement),
+            "unfreeze_done": bool(unfreeze_done),
             "cfg": OmegaConf.to_container(cfg, resolve=False),
         },
         path,
     )
 
 
-def train_iters(cfg: DictConfig, model, loaders) -> dict:
-    """Entrena durante un número fijo de iteraciones del optimizador.
+class Trainer:
+    """Entrenador principal epoch-based para fine-tuning de encoders SSL."""
 
-    ``global_step`` cuenta los pasos del optimizador después de la acumulación de gradientes, no
-    las épocas del cargador de datos. Por lo tanto, la validación y la detención temprana son independientes
-    del tamaño del conjunto de datos.
-    """
-    set_global_determinism(int(_select(cfg, "seed", 42)))
-
-    train_loader, val_loader = loaders
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    model.train()
-
-    max_iterations = _int_knob(
-        cfg,
-        "training.sanity.max_iterations",
-        _int_knob(cfg, "experiment.max_iterations", 50_000),
+    _ENCODER_NAME_MARKERS = (
+        "encoder",
+        "patch_embed",
+        "swinvit",
+        "swin_vit",
+        "layers1",
+        "layers2",
+        "layers3",
+        "layers4",
+        "convinit",
+        "down_layers",
+        "downsample",
+        "bottleneck",
     )
-    val_every = _int_knob(
-        cfg,
-        "training.sanity.val_every",
-        _int_knob(cfg, "experiment.val_every", 500),
-    )
-    log_every = _int_knob(cfg, "experiment.log_every", 50)
-    grad_accum_steps = max(_int_knob(cfg, "experiment.grad_accum_steps", 1), 1)
-    patience = _int_knob(cfg, "experiment.patience", 20)
-    fixed_iterations = bool(_select(cfg, "experiment.fixed_iterations", False))
 
-    optimizer = _make_optimizer(cfg, model)
-    scheduler = build_poly_scheduler(
-        optimizer,
-        max_steps=max_iterations,
-        exp=float(cfg.training.scheduler.get("exp", 0.9)),
-    )
-    base_loss = build_loss(cfg)
-    amp_enabled = bool(cfg.training.get("amp", False)) and device.type == "cuda"
-    scaler = GradScaler("cuda", enabled=amp_enabled)
+    def __init__(
+        self,
+        cfg: DictConfig,
+        model: torch.nn.Module,
+        loaders: tuple[Iterable, Iterable],
+        *,
+        unfreeze_epoch: int = -1,
+        unfreeze_lr_factor: float = 1.0,
+    ) -> None:
+        set_global_determinism(int(_select(cfg, "seed", 42)))
 
-    out_dir = _outputs_dir(cfg)
-    ckpt_dir = out_dir / "checkpoints"
-    ckpt_dir.mkdir(parents=True, exist_ok=True)
-    metrics_path = out_dir / "metrics.csv"
-    summary_path = out_dir / "summary.json"
-    best_ckpt = ckpt_dir / "best.pt"
-    last_ckpt = ckpt_dir / "last.pt"
+        self.cfg = cfg
+        self.train_loader, self.val_loader = loaders
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = model.to(self.device)
+        self.model.train()
 
-    wandb_run = None
-    if wandb_enabled():
+        self.grad_accum_steps = max(_int_select(cfg, "experiment.grad_accum_steps", 1), 1)
+        self.steps_per_epoch = max(
+            math.ceil(_loader_len(self.train_loader) / self.grad_accum_steps), 1
+        )
+        self.max_epochs = self._resolve_max_epochs()
+        self.max_steps = self.max_epochs * self.steps_per_epoch
+        self.val_every_epochs = max(
+            _int_select(
+                cfg, "training.val_every_epochs", _int_select(cfg, "experiment.val_every_epochs", 1)
+            ),
+            1,
+        )
+        self.log_every_steps = max(_int_select(cfg, "experiment.log_every", 50), 1)
+        self.patience_epochs = max(_int_select(cfg, "experiment.patience", 20), 1)
+        self.fixed_epochs = bool(
+            _select(
+                cfg, "experiment.fixed_epochs", _select(cfg, "experiment.fixed_iterations", False)
+            )
+        )
+
+        self.unfreeze_epoch = int(unfreeze_epoch)
+        self.unfreeze_lr_factor = float(unfreeze_lr_factor)
+        if self.unfreeze_lr_factor <= 0.0:
+            raise ValueError("unfreeze_lr_factor debe ser > 0")
+        self._unfreeze_done = self.unfreeze_epoch < 0
+
+        if self.unfreeze_epoch > 0:
+            self._freeze_encoder()
+
+        self.optimizer = _make_optimizer(cfg, self.model)
+        self.scheduler = build_poly_scheduler(
+            self.optimizer,
+            max_steps=self.max_steps,
+            exp=float(cfg.training.scheduler.get("exp", 0.9)),
+        )
+        self.base_loss = build_loss(cfg)
+        self.amp_enabled = bool(cfg.training.get("amp", False)) and self.device.type == "cuda"
+        self.scaler = GradScaler("cuda", enabled=self.amp_enabled)
+
+        self.out_dir = _outputs_dir(cfg)
+        self.ckpt_dir = self.out_dir / "checkpoints"
+        self.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        self.metrics_path = self.out_dir / "metrics.csv"
+        self.summary_path = self.out_dir / "summary.json"
+        self.best_ckpt = self.ckpt_dir / "best.pt"
+        self.last_ckpt = self.ckpt_dir / "last.pt"
+        self.wandb_run = self._init_wandb()
+
+    def _resolve_max_epochs(self) -> int:
+        configured = _select(
+            self.cfg,
+            "training.max_epochs",
+            _select(self.cfg, "experiment.max_epochs", None),
+        )
+        if configured is not None:
+            return max(int(configured), 1)
+
+        max_iterations = _select(
+            self.cfg,
+            "training.sanity.max_iterations",
+            _select(self.cfg, "experiment.max_iterations", None),
+        )
+        if max_iterations is not None:
+            return max(math.ceil(int(max_iterations) / self.steps_per_epoch), 1)
+        return 100
+
+    def _init_wandb(self):
+        if not wandb_enabled():
+            return None
         try:
             import wandb
 
-            wandb_run = wandb.init(
+            return wandb.init(
                 project="lungseg",
-                config=OmegaConf.to_container(cfg, resolve=False),
-                dir=str(out_dir),
+                config=OmegaConf.to_container(self.cfg, resolve=False),
+                dir=str(self.out_dir),
             )
         except Exception as exc:
             LOGGER.warning("W&B requested but could not be initialized: %s", exc)
+            return None
 
-    train_iter = iter(_make_train_iter(train_loader, cfg))
-    optimizer.zero_grad(set_to_none=True)
-    global_step = 0
-    micro_step = 0
-    running_loss = 0.0
-    best_dice = -1.0
-    best_hd95 = float("nan")
-    best_step = 0
-    validations_without_improvement = 0
-    rows: list[dict[str, float | int]] = []
-    last_metrics = {"val_dice": float("nan"), "val_hd95": float("nan")}
+    def _iter_train_batches(self) -> Iterator[dict[str, Any]]:
+        if bool(_select(self.cfg, "training.sanity.overfit_one_batch", False)):
+            yield next(iter(self.train_loader))
+            return
+        yield from self.train_loader
 
-    while global_step < max_iterations:
-        batch = next(train_iter)
-        image, label = _batch_to_device(batch, device)
-        with _autocast_context(device, amp_enabled):
-            output = _model_output_for_loss(model(image))
-            loss = deep_supervision_loss(output, label, base_loss) / grad_accum_steps
+    def _epoch_batches(self) -> int:
+        if bool(_select(self.cfg, "training.sanity.overfit_one_batch", False)):
+            return 1
+        return _loader_len(self.train_loader)
 
-        scaler.scale(loss).backward()
-        running_loss += float(loss.detach().cpu()) * grad_accum_steps
-        micro_step += 1
+    def _is_encoder_parameter(self, name: str) -> bool:
+        lowered = name.lower()
+        return any(marker in lowered for marker in self._ENCODER_NAME_MARKERS)
 
-        if micro_step % grad_accum_steps != 0:
-            continue
+    def _freeze_encoder(self) -> None:
+        for name, param in self.model.named_parameters():
+            if self._is_encoder_parameter(name):
+                param.requires_grad = False
 
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
-        scheduler.step()
-        global_step += 1
+    def _unfreeze_model(self) -> None:
+        if self._unfreeze_done:
+            return
 
-        lr = float(optimizer.param_groups[0]["lr"])
-        mean_train_loss = running_loss / grad_accum_steps
-        running_loss = 0.0
+        for param in self.model.parameters():
+            param.requires_grad = True
 
-        if global_step % log_every == 0 or global_step == 1:
-            LOGGER.info("step=%d/%d loss=%.4f lr=%.6g", global_step, max_iterations, mean_train_loss, lr)
-            if wandb_run is not None:
-                wandb_run.log({"train/loss": mean_train_loss, "lr": lr, "step": global_step})
+        for idx, group in enumerate(self.optimizer.param_groups):
+            group["lr"] = float(group["lr"]) * self.unfreeze_lr_factor
+            if "initial_lr" in group:
+                group["initial_lr"] = float(group["initial_lr"]) * self.unfreeze_lr_factor
+            if hasattr(self.scheduler, "base_lrs") and idx < len(self.scheduler.base_lrs):
+                self.scheduler.base_lrs[idx] = (
+                    float(self.scheduler.base_lrs[idx]) * self.unfreeze_lr_factor
+                )
 
-        should_validate = global_step % val_every == 0 or global_step == max_iterations
-        if not should_validate:
-            continue
+        if hasattr(self.scheduler, "_last_lr"):
+            self.scheduler._last_lr = [float(group["lr"]) for group in self.optimizer.param_groups]
+        self._unfreeze_done = True
 
-        last_metrics = _validate(cfg, model, val_loader, device)
-        row = {
-            "step": global_step,
-            "train_loss": mean_train_loss,
-            "lr": lr,
-            "val_dice": last_metrics["val_dice"],
-            "val_hd95": last_metrics["val_hd95"],
-        }
-        rows.append(row)
-        _write_metrics_csv(metrics_path, rows)
-        LOGGER.info(
-            "val step=%d dice=%.4f hd95=%s",
-            global_step,
-            last_metrics["val_dice"],
-            f"{last_metrics['val_hd95']:.3f}" if math.isfinite(last_metrics["val_hd95"]) else "nan",
-        )
-        if wandb_run is not None:
-            wandb_run.log(
+    def _optimizer_step(self) -> None:
+        self.scaler.step(self.optimizer)
+        self.scaler.update()
+        self.optimizer.zero_grad(set_to_none=True)
+        self.scheduler.step()
+
+    def _load_resume_state(self) -> tuple[int, int, int, int, float, float, int, dict[str, float]]:
+        resume_from = _select(self.cfg, "training.resume_from", None)
+        if not resume_from:
+            return (
+                0,
+                0,
+                0,
+                0,
+                -1.0,
+                float("nan"),
+                0,
                 {
-                    "val/dice": last_metrics["val_dice"],
-                    "val/hd95": last_metrics["val_hd95"],
-                    "step": global_step,
-                }
+                    "val_dice": float("nan"),
+                    "val_hd95": float("nan"),
+                },
             )
 
-        if last_metrics["val_dice"] > best_dice:
-            best_dice = last_metrics["val_dice"]
-            best_hd95 = last_metrics["val_hd95"]
-            best_step = global_step
-            validations_without_improvement = 0
-            _save_checkpoint(best_ckpt, cfg, model, optimizer, global_step, last_metrics)
-        else:
-            validations_without_improvement += 1
+        resume_path = _resolve_resume_path(str(resume_from), self.out_dir)
+        checkpoint = torch.load(resume_path, map_location="cpu")
+        self.model.load_state_dict(checkpoint["model_state_dict"])
 
-        _save_checkpoint(last_ckpt, cfg, model, optimizer, global_step, last_metrics)
-        if not fixed_iterations and validations_without_improvement >= patience:
-            LOGGER.info("early stopping at step=%d after %d stale validations", global_step, patience)
-            break
+        if "optimizer_state_dict" in checkpoint:
+            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            _optimizer_state_to_device(self.optimizer, self.device)
+        if "scheduler_state_dict" in checkpoint:
+            self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        if "scaler_state_dict" in checkpoint:
+            self.scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
-    if not rows:
-        last_metrics = _validate(cfg, model, val_loader, device)
-        rows.append(
-            {
-                "step": global_step,
-                "train_loss": float("nan"),
-                "lr": float(optimizer.param_groups[0]["lr"]),
-                "val_dice": last_metrics["val_dice"],
-                "val_hd95": last_metrics["val_hd95"],
-            }
+        start_epoch = int(checkpoint.get("epoch", -1)) + 1
+        global_step = int(checkpoint.get("step", 0))
+        self._unfreeze_done = bool(checkpoint.get("unfreeze_done", self._unfreeze_done))
+        if (
+            not self._unfreeze_done
+            and self.unfreeze_epoch >= 0
+            and start_epoch > self.unfreeze_epoch
+        ):
+            self._unfreeze_model()
+        elif self._unfreeze_done:
+            for param in self.model.parameters():
+                param.requires_grad = True
+
+        rows = _read_metrics_csv(self.metrics_path, max_step=global_step)
+        best_epoch, best_step, best_dice, best_hd95 = _best_from_rows(rows)
+        if "best_metrics" in checkpoint:
+            best_metrics = checkpoint["best_metrics"]
+            best_epoch = int(checkpoint.get("best_epoch", best_epoch))
+            best_step = int(checkpoint.get("best_step", best_step))
+            best_dice = float(best_metrics.get("val_dice", best_dice))
+            best_hd95 = float(best_metrics.get("val_hd95", best_hd95))
+        last_metrics = dict(
+            checkpoint.get("metrics", {"val_dice": float("nan"), "val_hd95": float("nan")})
         )
-        _write_metrics_csv(metrics_path, rows)
-        if last_metrics["val_dice"] > best_dice:
-            best_dice = last_metrics["val_dice"]
-            best_hd95 = last_metrics["val_hd95"]
-            best_step = global_step
-            _save_checkpoint(best_ckpt, cfg, model, optimizer, global_step, last_metrics)
+        stale_epochs = int(checkpoint.get("epochs_without_improvement", 0))
+        LOGGER.info("resuming training from %s at epoch=%d", resume_path, start_epoch)
+        return (
+            start_epoch,
+            global_step,
+            best_epoch,
+            best_step,
+            best_dice,
+            best_hd95,
+            stale_epochs,
+            last_metrics,
+        )
 
-    _save_checkpoint(last_ckpt, cfg, model, optimizer, global_step, last_metrics)
-    summary = {
-        "best_step": int(best_step),
-        "best_val_dice": _finite_or_none(best_dice),
-        "best_val_hd95": _finite_or_none(best_hd95),
-        "last_step": int(global_step),
-        "checkpoint_path": str(best_ckpt),
-        "last_checkpoint_path": str(last_ckpt),
-        "metrics_path": str(metrics_path),
-    }
-    summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
-    if wandb_run is not None:
-        wandb_run.finish()
-    return summary
+    def fit(self) -> dict[str, Any]:
+        (
+            start_epoch,
+            global_step,
+            best_epoch,
+            best_step,
+            best_dice,
+            best_hd95,
+            stale_epochs,
+            last_metrics,
+        ) = self._load_resume_state()
+        rows = _read_metrics_csv(self.metrics_path, max_step=global_step)
+
+        for current_epoch in range(start_epoch, self.max_epochs):
+            if current_epoch == self.unfreeze_epoch:
+                self._unfreeze_model()
+
+            self.model.train()
+            self.optimizer.zero_grad(set_to_none=True)
+            running_loss = 0.0
+            n_loss_terms = 0
+            pending_backward = 0
+            epoch_batches = self._epoch_batches()
+
+            for batch_idx, batch in enumerate(self._iter_train_batches(), start=1):
+                image, label = _batch_to_device(batch, self.device)
+                with _autocast_context(self.device, self.amp_enabled):
+                    output = _model_output_for_loss(self.model(image))
+                    loss = self.base_loss(output, label) / self.grad_accum_steps
+
+                self.scaler.scale(loss).backward()
+                running_loss += float(loss.detach().cpu()) * self.grad_accum_steps
+                n_loss_terms += 1
+                pending_backward += 1
+
+                if pending_backward < self.grad_accum_steps and batch_idx < epoch_batches:
+                    continue
+
+                self._optimizer_step()
+                global_step += 1
+                pending_backward = 0
+
+                if global_step % self.log_every_steps == 0 or global_step == 1:
+                    lr = float(self.optimizer.param_groups[0]["lr"])
+                    mean_loss = running_loss / max(n_loss_terms, 1)
+                    LOGGER.info(
+                        "epoch=%d step=%d loss=%.4f lr=%.6g",
+                        current_epoch,
+                        global_step,
+                        mean_loss,
+                        lr,
+                    )
+                    if self.wandb_run is not None:
+                        self.wandb_run.log(
+                            {
+                                "train/loss": mean_loss,
+                                "lr": lr,
+                                "epoch": current_epoch,
+                                "step": global_step,
+                            }
+                        )
+
+            should_validate = (
+                current_epoch + 1
+            ) % self.val_every_epochs == 0 or current_epoch == self.max_epochs - 1
+            mean_train_loss = running_loss / max(n_loss_terms, 1)
+            if should_validate:
+                last_metrics = _validate(self.cfg, self.model, self.val_loader, self.device)
+                row = {
+                    "epoch": current_epoch,
+                    "step": global_step,
+                    "train_loss": mean_train_loss,
+                    "lr": float(self.optimizer.param_groups[0]["lr"]),
+                    "val_dice": last_metrics["val_dice"],
+                    "val_hd95": last_metrics["val_hd95"],
+                }
+                rows.append(row)
+                _write_metrics_csv(self.metrics_path, rows)
+
+                if self.wandb_run is not None:
+                    self.wandb_run.log(
+                        {
+                            "val/dice": last_metrics["val_dice"],
+                            "val/hd95": last_metrics["val_hd95"],
+                            "epoch": current_epoch,
+                            "step": global_step,
+                        }
+                    )
+
+                if last_metrics["val_dice"] > best_dice:
+                    best_epoch, best_step, best_dice, best_hd95 = (
+                        current_epoch,
+                        global_step,
+                        last_metrics["val_dice"],
+                        last_metrics["val_hd95"],
+                    )
+                    stale_epochs = 0
+                    _save_checkpoint(
+                        self.best_ckpt,
+                        self.cfg,
+                        self.model,
+                        self.optimizer,
+                        self.scheduler,
+                        self.scaler,
+                        epoch=current_epoch,
+                        step=global_step,
+                        metrics=last_metrics,
+                        best_epoch=best_epoch,
+                        best_step=best_step,
+                        best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
+                        epochs_without_improvement=stale_epochs,
+                        unfreeze_done=self._unfreeze_done,
+                    )
+                else:
+                    stale_epochs += self.val_every_epochs
+
+            _save_checkpoint(
+                self.last_ckpt,
+                self.cfg,
+                self.model,
+                self.optimizer,
+                self.scheduler,
+                self.scaler,
+                epoch=current_epoch,
+                step=global_step,
+                metrics=last_metrics,
+                best_epoch=best_epoch,
+                best_step=best_step,
+                best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
+                epochs_without_improvement=stale_epochs,
+                unfreeze_done=self._unfreeze_done,
+            )
+
+            if not self.fixed_epochs and stale_epochs >= self.patience_epochs:
+                LOGGER.info("early stopping at epoch=%d", current_epoch)
+                break
+
+        summary = {
+            "best_epoch": int(best_epoch),
+            "best_val_dice": _finite_or_none(best_dice),
+            "checkpoint_path": str(self.best_ckpt),
+            "last_step": int(global_step),
+            "last_checkpoint_path": str(self.last_ckpt),
+            "metrics_path": str(self.metrics_path),
+        }
+        self.summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        if self.wandb_run is not None:
+            self.wandb_run.finish()
+        return summary
+
+    def run(self) -> dict[str, Any]:
+        return self.fit()
+
+
+def train_iters(
+    cfg: DictConfig, model: torch.nn.Module, loaders: tuple[Iterable, Iterable]
+) -> dict[str, Any]:
+    return Trainer(
+        cfg,
+        model,
+        loaders,
+        unfreeze_epoch=_int_select(cfg, "training.unfreeze_epoch", -1),
+        unfreeze_lr_factor=_float_select(cfg, "training.unfreeze_lr_factor", 1.0),
+    ).fit()

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 import nibabel as nib
+import numpy as np
 import torch
 import typer
 from hydra import compose, initialize_config_dir
@@ -97,19 +98,25 @@ def train(
     config_name: Annotated[str, typer.Option("--config-name")] = "config",
     overrides: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
-    """Entrena un modelo de segmentación con un bucle basado en iteraciones."""
+    """Entrena un modelo de segmentación con el entrenador por épocas SSL."""
     cfg = _compose_config(config_name, overrides)
     model = build_model(cfg)
     loaders = build_loaders(cfg, fold=int(cfg.fold), repo_root=_repo_root())
     summary = train_iters(cfg, model, loaders)
-    LOGGER.info("training complete: best Dice=%s checkpoint=%s", summary["best_val_dice"], summary["checkpoint_path"])
+    LOGGER.info(
+        "training complete: best Dice=%s checkpoint=%s",
+        summary["best_val_dice"],
+        summary["checkpoint_path"],
+    )
 
 
 @app.command()
 def predict(
     checkpoint: Annotated[str, typer.Option("--checkpoint")],
     image: Annotated[str, typer.Option("--image")],
+    label: Annotated[str | None, typer.Option("--label")] = None,
     output: Annotated[str, typer.Option("--output")] = "prediction.nii.gz",
+    visualize: Annotated[bool, typer.Option("--visualize")] = False,
     config_name: Annotated[str, typer.Option("--config-name")] = "config",
     overrides: Annotated[list[str] | None, typer.Argument()] = None,
 ) -> None:
@@ -117,7 +124,9 @@ def predict(
     cfg = _compose_config(config_name, overrides)
     payload = torch.load(checkpoint, map_location="cpu")
     if "cfg" in payload:
-        cfg = _prepare_output_dir(OmegaConf.create(payload["cfg"]), config_name=config_name, overrides=overrides or [])
+        cfg = _prepare_output_dir(
+            OmegaConf.create(payload["cfg"]), config_name=config_name, overrides=overrides or []
+        )
     model = build_model(cfg)
     model.load_state_dict(payload["model_state_dict"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -126,12 +135,27 @@ def predict(
     transform = build_val_transforms(cfg, with_label=False)
     sample = transform({"image": image})
     tensor = sample["image"].unsqueeze(0).to(device)
+
     with torch.no_grad():
         logits = predict_volume(model, tensor, cfg)
         pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype("uint8")
+
     affine = nib.load(image).affine
     nib.save(nib.Nifti1Image(pred, affine), output)
     LOGGER.info("prediction saved to %s", output)
+
+    if visualize:
+        from lungseg.utils.visualization import save_segmentation_mosaic, save_triplanar_prediction
+
+        img_np = tensor.squeeze().cpu().numpy()
+        lab_np = nib.load(label).get_fdata() if label else np.zeros_like(pred)
+
+        vis_dir = Path(output).parent / "visualizations"
+        vis_dir.mkdir(parents=True, exist_ok=True)
+
+        save_triplanar_prediction(img_np, lab_np, pred, vis_dir / "triplanar.png")
+        save_segmentation_mosaic(img_np, pred, vis_dir / "mosaic.png")
+        LOGGER.info("Visualizations saved to %s", vis_dir)
 
 
 @app.command()
@@ -163,7 +187,9 @@ def classify(
     if volumes is None:
         volume_candidates = dataset["table"].filter(like="VoxelVolume")
         if volume_candidates.empty:
-            raise ValueError("la línea base de solo tamaño requiere una característica VoxelVolume de PyRadiomics")
+            raise ValueError(
+                "la línea base de solo tamaño requiere una característica VoxelVolume de PyRadiomics"
+            )
         volumes = volume_candidates.iloc[:, 0]
     size_only = evaluate_size_only(volumes.to_numpy(), dataset["y"], dataset["groups"])
     result = {"full": full, "size_only": size_only, "n_nodules": len(dataset["y"])}

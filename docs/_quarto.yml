@@ -1,0 +1,26 @@
+project:
+  type: default
+
+format:
+  pdf:
+    documentclass: article
+    papersize: a4
+    fontsize: 11pt
+    geometry: margin=2.5cm
+    number-sections: true
+    colorlinks: true
+    toc: true
+    toc-depth: 3
+    lang: es
+    fig-pos: "H"
+    header-includes:
+      - \usepackage{float}
+      - \usepackage{booktabs}
+      - \usepackage{caption}
+      - \captionsetup{font=small}
+
+execute:
+  echo: false
+  warning: false
+
+bibliography: references.bib

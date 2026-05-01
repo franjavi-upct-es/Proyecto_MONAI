@@ -75,7 +75,9 @@ def build_radiomic_dataset(cfg: DictConfig, e2e: bool = False):
     """
     data_name = str(_select(cfg, "data.name", "")).lower()
     if data_name in {"task06", "task06_lung", "msd_task06"}:
-        raise ValueError("MSD Task06_Lung has no benign/malignant labels; use data=lidc for Phase 5")
+        raise ValueError(
+            "MSD Task06_Lung has no benign/malignant labels; use data=lidc for Phase 5"
+        )
     if data_name not in {"lidc", "lidc-idri", "lidc_idri"}:
         raise ValueError(f"unsupported classification dataset {data_name!r}; expected LIDC-IDRI")
 
@@ -115,7 +117,9 @@ def build_radiomic_dataset(cfg: DictConfig, e2e: bool = False):
         )
 
     if not rows:
-        raise ValueError("no benign/malignant LIDC nodules remained after discarding malignancy_median == 3")
+        raise ValueError(
+            "no benign/malignant LIDC nodules remained after discarding malignancy_median == 3"
+        )
     table = pd.DataFrame(rows)
     feature_columns = [
         c

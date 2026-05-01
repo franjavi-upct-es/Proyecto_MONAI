@@ -1,15 +1,15 @@
-"""Training stack: losses, schedulers, iteration-based trainer."""
+"""Training stack: losses, schedulers, epoch-based SSL trainer."""
 
 from __future__ import annotations
 
-from lungseg.training.losses import build_loss, deep_supervision_loss
+from lungseg.training.losses import build_loss
 from lungseg.training.schedulers import build_poly_scheduler, poly_lr
-from lungseg.training.trainer import train_iters
+from lungseg.training.trainer import Trainer, train_iters
 
 __all__ = [
+    "Trainer",
     "build_loss",
     "build_poly_scheduler",
-    "deep_supervision_loss",
     "poly_lr",
     "train_iters",
 ]

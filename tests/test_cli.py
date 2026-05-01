@@ -20,7 +20,9 @@ def test_prepare_output_dir_handles_unresolved_hydra_interpolation(tmp_path: Pat
     assert (output_path / ".hydra" / "config.yaml").exists()
 
 
-def test_build_loaders_falls_back_when_cache_dataset_is_unavailable(monkeypatch, tmp_path: Path) -> None:
+def test_build_loaders_falls_back_when_cache_dataset_is_unavailable(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Verifica que si falla CacheDataset (RAM), se retroceda a un Dataset (o PersistentDataset según la config)."""
     config_dir = str((_repo_root() / "configs").resolve())
     with initialize_config_dir(config_dir=config_dir, version_base=None):

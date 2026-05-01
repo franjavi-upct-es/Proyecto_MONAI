@@ -22,8 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 @dataclass(frozen=True)
 class CaseRecord:
-    image: str          # ruta relativa a la raíz del repositorio
-    label: str          # ruta relativa a la raíz del repositorio
+    image: str  # ruta relativa a la raíz del repositorio
+    label: str  # ruta relativa a la raíz del repositorio
     patient_id: str
     tumor_volume_mm3: float
     stratum: int

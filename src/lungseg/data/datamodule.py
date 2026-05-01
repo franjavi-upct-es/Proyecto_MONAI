@@ -161,7 +161,9 @@ def build_loaders(
             )
             train_ds, val_ds = _plain_datasets(train_files, val_files, train_tf, val_tf)
     else:
-        LOGGER.warning("data.cache.mode=%s with data.cache.rate <= 0; using uncached Dataset.", cache_mode)
+        LOGGER.warning(
+            "data.cache.mode=%s with data.cache.rate <= 0; using uncached Dataset.", cache_mode
+        )
         train_ds, val_ds = _plain_datasets(train_files, val_files, train_tf, val_tf)
 
     train_loader = DataLoader(

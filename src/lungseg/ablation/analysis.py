@@ -24,7 +24,9 @@ def _markdown_table(df: pd.DataFrame) -> list[str]:
 def analyze(outputs_dir: Path) -> Path:
     outputs_dir = Path(outputs_dir)
     ablation_dir = outputs_dir / "ablation"
-    rows = [json.loads(path.read_text(encoding="utf-8")) for path in sorted(ablation_dir.glob("*.json"))]
+    rows = [
+        json.loads(path.read_text(encoding="utf-8")) for path in sorted(ablation_dir.glob("*.json"))
+    ]
     if not rows:
         raise FileNotFoundError(f"no ablation JSON files found in {ablation_dir}")
 
@@ -91,7 +93,9 @@ def analyze(outputs_dir: Path) -> Path:
         for fraction, stat, p_value in wilcoxon_rows:
             lines.append(f"| {fraction:g} | {stat:.4g} | {p_value:.4g} |")
     else:
-        lines.append("No hay suficientes semillas emparejadas para ejecutar las pruebas de Wilcoxon.")
+        lines.append(
+            "No hay suficientes semillas emparejadas para ejecutar las pruebas de Wilcoxon."
+        )
     lines.extend(["", f"- Summary CSV: `{summary_path}`"])
     if str(plot_path):
         lines.append(f"- Violin plot: `{plot_path}`")

@@ -1,0 +1,17 @@
+# configs/model/vit_25d_lung.yaml
+name: vit_25d
+spatial_dims: 3
+in_channels: 1
+out_channels: 2
+encoder_name: vit_base_patch16_224
+pretrained: true
+
+loss:
+  name: dice_focal
+  to_onehot_y: true
+  softmax: true
+  include_background: false
+  squared_pred: true
+  gamma: 2.0
+  lambda_dice: 1.0
+  lambda_focal: 1.0

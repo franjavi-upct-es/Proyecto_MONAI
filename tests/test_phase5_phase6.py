@@ -36,10 +36,7 @@ def test_classification_pipeline_grouped_cv_outputs_metrics() -> None:
 
 
 def test_ablation_fractional_sampling_is_deterministic_and_stratified() -> None:
-    records = [
-        {"patient_id": f"p{i}", "stratum": i % 3}
-        for i in range(18)
-    ]
+    records = [{"patient_id": f"p{i}", "stratum": i % 3} for i in range(18)]
     a = _sample_train_records(records, fraction=0.5, seed=7)
     b = _sample_train_records(records, fraction=0.5, seed=7)
     assert a == b

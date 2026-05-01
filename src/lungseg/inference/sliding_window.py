@@ -1,4 +1,4 @@
-"""Envoltorio para inferencia por ventana deslizante."""
+"""Envoltorio para inferencia por ventana deslizante optimizado para modelos SSL/Hybrid."""
 
 from __future__ import annotations
 
@@ -8,19 +8,19 @@ from omegaconf import DictConfig
 
 
 def predict_volume(model: torch.nn.Module, image: torch.Tensor, cfg: DictConfig) -> torch.Tensor:
-    """Ejecuta la inferencia por ventana deslizante de MONAI y normaliza la forma de salida del modelo.
+    """Ejecuta la inferencia por ventana deslizante de MONAI.
 
-    DynUNet con supervisión profunda devuelve ``(B, n_ds, C, ...)`` para cada
-    ventana. La validación y la inferencia siempre consumen la predicción de
-    resolución final, ``out[:, 0]``.
+    Se asegura de extraer la salida principal en caso de modelos que devuelvan tuplas,
+    manteniendo la compatibilidad con la arquitectura de segmentación de producción.
     """
 
     def _predictor(window: torch.Tensor) -> torch.Tensor:
         out = model(window)
+        # Soporte para modelos que devuelven múltiples salidas o diccionarios (solo se usa la principal)
         if isinstance(out, (tuple, list)):
             out = out[0]
-        if isinstance(out, torch.Tensor) and out.dim() == window.dim() + 1:
-            out = out[:, 0]
+        elif isinstance(out, dict):
+            out = out.get("logits", next(iter(out.values())))
         return out
 
     inference_cfg = cfg.training.get("inference", {})

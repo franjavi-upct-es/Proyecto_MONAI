@@ -1,0 +1,68 @@
+---
+title: "Del Volumen al 2.5D: Segmentación con ViT Slice-wise"
+subtitle: "Análisis de Tumores Pulmonares con Encoders 2D Pre-entrenados"
+author:
+  - Francisco Javier Mercader Martínez
+  - Chaimae Chahlal
+  - Hiba Chakour
+date: today
+date-format: "D [de] MMMM [de] YYYY"
+abstract: |
+  Este proyecto presenta un pipeline de segmentación médica para tumores pulmonares
+  en CT. Hemos evolucionado la arquitectura clásica 3D hacia un enfoque **2.5D Slice-wise** 
+  para mitigar el enorme coste computacional de los volúmenes completos. 
+  Integrando **ViT (Vision Transformers)** 2D pre-entrenados mediante `timm` (DINO/MAE), procesamos 
+  los cortes de profundidad como batch. Los resultados demuestran que esta estrategia, 
+  junto con el uso de DiceFocalLoss, permite una convergencia ágil y eficiente en hardware
+  limitado usando el dataset MSD Task06_Lung.
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import json
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from IPython.display import Markdown
+
+DIR = Path("outputs")
+# Lógica para encontrar el último summary si existe
+```
+
+# Introducción
+
+## El Giro hacia el 2.5D Slice-wise y ViT
+
+En la medicina, la segmentación 3D pura (`Conv3d`, `SwinUNETR`) consume enormes cantidades de VRAM y dificulta el entrenamiento en hardware estándar. Nuestro proyecto aborda esto procesando los volúmenes como una secuencia de cortes 2D (batching the depth dimension), lo que permite usar potentes Transformers de Visión (ViT) pre-entrenados (`timm`). 
+
+## Arquitectura
+
+El modelo `ViT25D` sigue este flujo:
+1. Recibe un volumen 3D: `(B, C, H, W, D)`.
+2. Transforma el eje de profundidad al batch: `(B*D, C, H, W)`.
+3. Pasa por el **ViT Encoder** 2D (`vit_base_patch16_224`) pre-entrenado.
+4. Es reconstruido por un **CNN Decoder** 2D (`ConvTranspose2d`).
+5. Vuelve al espacio volumétrico: `(B, out_channels, H, W, D)`.
+
+# Fase 4 — Segmentación Avanzada: 2.5D ViT
+
+Esta fase ha sido completamente refactorizada para abandonar el 3D en favor de la eficiencia.
+
+| Modelo | Tipo | Innovación |
+|:------:|:----:|------------|
+| **ViT 2.5D** | Híbrido Slice-wise | Encoder ViT 2D + Decoder CNN 2D con transformación volumétrica automática. |
+
+## Optimización: DiceFocalLoss
+
+Sustituimos la pérdida estándar por **DiceFocalLoss**. El componente **Focal** penaliza los píxeles difíciles (bordes del tumor, texturas similares al parénquima) mientras que el componente **Dice** asegura la cohesión estructural de la segmentación.
+
+# Fase 6 — Experimento de Escasez y SSL
+
+La inicialización de pesos en el ViT 2.5D demuestra que usar características de propósito general entrenadas con enfoques Self-Supervised (MAE/DINO) beneficia tareas específicas como la radiología pulmonar, mitigando parte de la escasez de datos.
+
+# Discusión y Conclusiones
+
+Este proyecto demuestra que no siempre es necesario procesar en 3D puro para obtener buenos modelos volumétricos. Reformular el problema a 2.5D (slice-wise) habilitó el uso de Transformers muy profundos, logrando entrenar en hardware donde una red equivalente en 3D habría fallado por falta de memoria VRAM.
+

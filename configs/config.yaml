@@ -1,7 +1,7 @@
 # Root Hydra config. Group defaults are composed below; CLI overrides win.
 defaults:
   - data: task06
-  - model: segresnet_lung
+  - model: vit_25d_lung
   - training: local_5060
   - experiment: phase4_full
   - _self_
