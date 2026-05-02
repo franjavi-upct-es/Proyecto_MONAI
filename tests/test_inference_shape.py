@@ -47,6 +47,8 @@ def _trainer_cfg(tmp_path: Path):
                 "grad_accum_steps": 1,
                 "log_every": 1,
                 "fixed_iterations": True,
+                "save_last_checkpoint": True,
+                "save_resume_state": True,
             },
         }
     )

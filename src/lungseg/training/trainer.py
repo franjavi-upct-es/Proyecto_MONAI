@@ -264,25 +264,44 @@ def _save_checkpoint(
     best_metrics: dict[str, float],
     epochs_without_improvement: int,
     unfreeze_done: bool,
+    save_resume_state: bool = False,
+    save_only_trainable: bool = False,
 ) -> None:
-    torch.save(
-        {
-            "epoch": int(epoch),
-            "step": int(step),
-            "metrics": metrics,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "scheduler_state_dict": scheduler.state_dict(),
-            "scaler_state_dict": scaler.state_dict(),
-            "best_epoch": int(best_epoch),
-            "best_step": int(best_step),
-            "best_metrics": best_metrics,
-            "epochs_without_improvement": int(epochs_without_improvement),
-            "unfreeze_done": bool(unfreeze_done),
-            "cfg": OmegaConf.to_container(cfg, resolve=False),
-        },
-        path,
-    )
+    """Persiste un checkpoint en `path`.
+
+    Por defecto guarda lo mínimo para inferencia (`model_state_dict`,
+    metadatos de epoch/step y la cfg). Flags opt-in:
+
+    - ``save_resume_state=True``: incluye optimizer/scheduler/scaler para
+      reanudar entrenamiento. Añade ~25 MB en ViT25D con encoder congelado.
+    - ``save_only_trainable=True``: persiste sólo los parámetros con
+      ``requires_grad=True``. Útil cuando el encoder pre-entrenado se
+      reconstruye desde timm al cargar; reduce el fichero de ~350 MB a
+      ~12 MB para `vit_25d_lung` con `freeze_encoder=true`.
+    """
+    state_dict = model.state_dict()
+    if save_only_trainable:
+        trainable_names = {n for n, p in model.named_parameters() if p.requires_grad}
+        state_dict = {k: v for k, v in state_dict.items() if k in trainable_names}
+
+    payload: dict[str, Any] = {
+        "epoch": int(epoch),
+        "step": int(step),
+        "metrics": metrics,
+        "model_state_dict": state_dict,
+        "model_state_is_partial": bool(save_only_trainable),
+        "best_epoch": int(best_epoch),
+        "best_step": int(best_step),
+        "best_metrics": best_metrics,
+        "epochs_without_improvement": int(epochs_without_improvement),
+        "unfreeze_done": bool(unfreeze_done),
+        "cfg": OmegaConf.to_container(cfg, resolve=False),
+    }
+    if save_resume_state:
+        payload["optimizer_state_dict"] = optimizer.state_dict()
+        payload["scheduler_state_dict"] = scheduler.state_dict()
+        payload["scaler_state_dict"] = scaler.state_dict()
+    torch.save(payload, path)
 
 
 class Trainer:
@@ -344,6 +363,19 @@ class Trainer:
             _select(
                 cfg, "experiment.fixed_epochs", _select(cfg, "experiment.fixed_iterations", False)
             )
+        )
+        # Política de checkpointing en disco. En RTX 5060 con disco pequeño,
+        # los defaults agresivos: solo `best.pt`, sin optimizer state, sólo
+        # parámetros entrenables (los pesos del encoder MAE se reconstruyen
+        # desde timm al cargar). El usuario puede activar
+        # `save_resume_state=true`, `save_last_checkpoint=true` o
+        # `save_only_trainable=false` cuando quiera el comportamiento clásico.
+        self.save_last_checkpoint = bool(
+            _select(cfg, "experiment.save_last_checkpoint", False)
+        )
+        self.save_resume_state = bool(_select(cfg, "experiment.save_resume_state", False))
+        self.save_only_trainable = bool(
+            _select(cfg, "experiment.save_only_trainable", True)
         )
 
         self.unfreeze_epoch = int(unfreeze_epoch)
@@ -523,7 +555,12 @@ class Trainer:
 
         resume_path = _resolve_resume_path(str(resume_from), self.out_dir)
         checkpoint = torch.load(resume_path, map_location="cpu")
-        self.model.load_state_dict(checkpoint["model_state_dict"])
+        # Si el checkpoint guardó sólo parámetros entrenables, los pesos
+        # restantes (típicamente el encoder MAE) ya están cargados al
+        # construir el modelo desde timm; usamos strict=False para
+        # complementar los entrenables sin pisar al encoder.
+        is_partial = bool(checkpoint.get("model_state_is_partial", False))
+        self.model.load_state_dict(checkpoint["model_state_dict"], strict=not is_partial)
 
         if "optimizer_state_dict" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
@@ -724,6 +761,8 @@ class Trainer:
                             best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
                             epochs_without_improvement=stale_epochs,
                             unfreeze_done=self._unfreeze_done,
+                            save_resume_state=self.save_resume_state,
+                            save_only_trainable=self.save_only_trainable,
                         )
                     else:
                         stale_epochs += 1
@@ -794,28 +833,33 @@ class Trainer:
                         best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
                         epochs_without_improvement=stale_epochs,
                         unfreeze_done=self._unfreeze_done,
+                        save_resume_state=self.save_resume_state,
+                            save_only_trainable=self.save_only_trainable,
                     )
                 else:
                     stale_epochs += self.val_every_epochs
 
                 self.model.train()
 
-            _save_checkpoint(
-                self.last_ckpt,
-                self.cfg,
-                self.model,
-                self.optimizer,
-                self.scheduler,
-                self.scaler,
-                epoch=current_epoch,
-                step=global_step,
-                metrics=last_metrics,
-                best_epoch=best_epoch,
-                best_step=best_step,
-                best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
-                epochs_without_improvement=stale_epochs,
-                unfreeze_done=self._unfreeze_done,
-            )
+            if self.save_last_checkpoint:
+                _save_checkpoint(
+                    self.last_ckpt,
+                    self.cfg,
+                    self.model,
+                    self.optimizer,
+                    self.scheduler,
+                    self.scaler,
+                    epoch=current_epoch,
+                    step=global_step,
+                    metrics=last_metrics,
+                    best_epoch=best_epoch,
+                    best_step=best_step,
+                    best_metrics={"val_dice": best_dice, "val_hd95": best_hd95},
+                    epochs_without_improvement=stale_epochs,
+                    unfreeze_done=self._unfreeze_done,
+                    save_resume_state=self.save_resume_state,
+                            save_only_trainable=self.save_only_trainable,
+                )
 
             if not self.fixed_epochs and stale_epochs >= self.patience_epochs:
                 LOGGER.info("early stopping at epoch=%d", current_epoch)
@@ -826,7 +870,7 @@ class Trainer:
             "best_val_dice": _finite_or_none(best_dice),
             "checkpoint_path": str(self.best_ckpt),
             "last_step": int(global_step),
-            "last_checkpoint_path": str(self.last_ckpt),
+            "last_checkpoint_path": str(self.last_ckpt) if self.save_last_checkpoint else None,
             "metrics_path": str(self.metrics_path),
         }
         self.summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

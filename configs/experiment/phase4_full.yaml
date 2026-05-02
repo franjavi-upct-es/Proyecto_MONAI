@@ -6,3 +6,9 @@ patience: 8
 grad_accum_steps: 8
 log_every: 10
 fixed_iterations: false
+
+# Política de checkpointing en disco. Defaults conservadores para discos
+# pequeños: solo `best.pt`, sin optimizer/scheduler/scaler. Activa estos
+# flags si necesitas reanudar entrenamiento desde el último estado.
+save_last_checkpoint: false
+save_resume_state: false

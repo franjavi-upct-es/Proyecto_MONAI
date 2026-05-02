@@ -133,7 +133,10 @@ def predict(
             OmegaConf.create(payload["cfg"]), config_name=config_name, overrides=overrides or []
         )
     model = build_model(cfg)
-    model.load_state_dict(payload["model_state_dict"])
+    # Checkpoints parciales (sólo entrenables) requieren strict=False; los
+    # pesos restantes vienen ya inicializados desde timm en build_model.
+    is_partial = bool(payload.get("model_state_is_partial", False))
+    model.load_state_dict(payload["model_state_dict"], strict=not is_partial)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device).eval()
 

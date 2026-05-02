@@ -92,8 +92,6 @@ python -m lungseg.cli predict --checkpoint best.pt \
 
 ## Reglas estrictas
 
-Vea [.claude/CLAUDE.md](.claude/CLAUDE.md) para la lista completa. Destacados:
-
 - GroupKFold a nivel de paciente; nunca aleatorio por imagen.
 - Tres ventanas HU como canales (`-1000..0`, `-150..250`, `-1024..400`) en
   lugar de un único `ScaleIntensityRanged`.
@@ -116,6 +114,5 @@ configs/                    # árbol de Hydra (data/, model/, training/, experim
 tests/                      # suite de pytest
 data/{raw,processed,splits,cache} # raw/, processed/, cache/ en .gitignore
 outputs/                    # checkpoints + ejecuciones de Hydra (en .gitignore)
-docs/legacy_metrics/        # CSVs citados en REPORT_DIAGNOSIS.md
 notebooks/                  # B7 (Kaggle) aterriza aquí
 ```

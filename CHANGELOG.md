@@ -2,6 +2,25 @@
 
 ## [Sin publicar]
 
+### Reducción agresiva de la huella en disco de los checkpoints (2026-05-02)
+
+- Cada `_save_checkpoint` escribía `model_state_dict` completo (348 MB en
+  ViT-Base) + optimizer/scheduler/scaler en `best.pt` y `last.pt` por fold.
+  Con varios `make phase4-fold` apilando RUN_IDs distintos, llenaba el disco.
+- Defaults nuevos en `experiment` para discos pequeños:
+  - `save_last_checkpoint: false` — sólo se persiste `best.pt`.
+  - `save_only_trainable: true` — `model_state_dict` filtra a parámetros con
+    `requires_grad=True`. El encoder MAE congelado (que pesa ~350 MB) se
+    reconstruye desde timm al cargar; sólo persistimos el decoder + cabezas
+    de deep supervision (~12 MB en vit_25d_lung).
+  - `save_resume_state: false` — sin optimizer/scheduler/scaler. Activa este
+    flag explícitamente para reanudar entrenamientos.
+- `_load_resume_state` y `cli.predict` usan `strict=not model_state_is_partial`
+  al cargar; si el flag está en el checkpoint, se complementan los pesos
+  recién inicializados sin error.
+- Resultado: `best.pt` pasa de 348 MB → 12 MB (×28 más pequeño); ya no se
+  escribe `last.pt` salvo opt-in.
+
 ### Fix de OOM de VRAM en validación sliding-window (2026-05-02)
 
 - En sliding-window inference la ventana es `(B, 3, H, W, full_D)` con
