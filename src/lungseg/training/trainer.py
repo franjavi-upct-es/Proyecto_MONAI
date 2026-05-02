@@ -6,12 +6,14 @@ from __future__ import annotations
 import csv
 import json
 import math
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as functional
 from omegaconf import DictConfig, OmegaConf
 from torch.amp import GradScaler
 
@@ -57,10 +59,61 @@ def _autocast_context(device: torch.device, enabled: bool):
     return nullcontext()
 
 
+_DEEP_SUPERVISION_WEIGHTS: tuple[float, ...] = (1.0, 0.5, 0.25)
+
+
 def _model_output_for_loss(output: torch.Tensor | tuple | list) -> torch.Tensor:
     if isinstance(output, (tuple, list)):
         output = output[0]
     return output
+
+
+def _downsample_label(label: torch.Tensor, scale: float) -> torch.Tensor:
+    """Reduce sólo las dimensiones XY (las dos primeras espaciales), no Z.
+
+    Las cabezas auxiliares del decoder ViT25D operan slice-wise, así que sólo
+    reducen H y W; Z se conserva.
+    """
+    if scale == 1.0:
+        return label
+    spatial_dims = label.dim() - 2
+    if spatial_dims == 3:
+        scale_factor = (scale, scale, 1.0)
+    elif spatial_dims == 2:
+        scale_factor = (scale, scale)
+    else:
+        raise ValueError(f"label debe tener 2 o 3 dims espaciales, recibido {spatial_dims}")
+    return functional.interpolate(
+        label.float(), scale_factor=scale_factor, mode="nearest"
+    ).to(label.dtype)
+
+
+def _deep_supervision_loss(
+    base_loss: torch.nn.Module,
+    outputs: list[torch.Tensor],
+    label: torch.Tensor,
+    weights: tuple[float, ...] = _DEEP_SUPERVISION_WEIGHTS,
+) -> torch.Tensor:
+    """Combina pérdidas a varias resoluciones con pesos decrecientes.
+
+    El primer output es full-res; los demás se asocian a labels reducidos por
+    `nearest`. La suma de pesos no se renormaliza (1.0 + 0.5 + 0.25 = 1.75) —
+    la magnitud absoluta sigue siendo razonable y deja claro que la cabeza
+    principal domina.
+    """
+    if len(outputs) > len(weights):
+        raise ValueError(
+            f"deep supervision: el modelo emitió {len(outputs)} outputs y "
+            f"los pesos definidos son {len(weights)}"
+        )
+    total: torch.Tensor | None = None
+    for idx, output in enumerate(outputs):
+        scale = 1.0 if idx == 0 else 0.5 ** idx
+        target = _downsample_label(label, scale)
+        term = base_loss(output, target) * float(weights[idx])
+        total = term if total is None else total + term
+    assert total is not None
+    return total
 
 
 def _batch_to_device(
@@ -297,10 +350,18 @@ class Trainer:
         self.unfreeze_lr_factor = float(unfreeze_lr_factor)
         if self.unfreeze_lr_factor <= 0.0:
             raise ValueError("unfreeze_lr_factor debe ser > 0")
-        self._unfreeze_done = self.unfreeze_epoch < 0
+        # Semántica del flag:
+        #   unfreeze_epoch < 0  -> congelar encoder y nunca descongelar.
+        #   unfreeze_epoch == 0 -> entrenar todo el modelo desde el inicio.
+        #   unfreeze_epoch > 0  -> congelar encoder y descongelar en esa epoch.
+        # `_unfreeze_done=True` indica que no hay transición pendiente.
+        self._unfreeze_done = self.unfreeze_epoch <= 0
 
-        if self.unfreeze_epoch > 0:
+        if self.unfreeze_epoch != 0:
             self._freeze_encoder()
+
+        self._log_parameter_counts()
+        self._first_batch_timing_done = False
 
         self.optimizer = _make_optimizer(cfg, self.model)
 
@@ -386,6 +447,36 @@ class Trainer:
         for name, param in self.model.named_parameters():
             if self._is_encoder_parameter(name):
                 param.requires_grad = False
+
+    def _log_parameter_counts(self) -> None:
+        total = sum(p.numel() for p in self.model.parameters())
+        trainable = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        frozen_pct = 100.0 * (1.0 - trainable / max(total, 1))
+        LOGGER.info(
+            "model: trainable=%d total=%d (frozen=%.1f%%)",
+            trainable,
+            total,
+            frozen_pct,
+        )
+
+    def _log_first_batch_timing(
+        self,
+        load_dt: float,
+        to_gpu_dt: float,
+        fwd_dt: float,
+        bwd_dt: float,
+    ) -> None:
+        """Loguea los tiempos del primer batch. Llamado una sola vez."""
+        if self._first_batch_timing_done:
+            return
+        self._first_batch_timing_done = True
+        LOGGER.info(
+            "timing(s): load=%.2f to_gpu=%.2f fwd=%.2f bwd=%.2f",
+            load_dt,
+            to_gpu_dt,
+            fwd_dt,
+            bwd_dt,
+        )
 
     def _unfreeze_model(self) -> None:
         if self._unfreeze_done:
@@ -503,13 +594,56 @@ class Trainer:
             pending_backward = 0
             epoch_batches = self._epoch_batches()
 
-            for batch_idx, batch in enumerate(self._iter_train_batches(), start=1):
-                image, label = _batch_to_device(batch, self.device)
-                with _autocast_context(self.device, self.amp_enabled):
-                    output = _model_output_for_loss(self.model(image))
-                    loss = self.base_loss(output, label) / self.grad_accum_steps
+            batch_iter = self._iter_train_batches()
+            batch_idx = 0
+            while True:
+                batch_idx += 1
+                instrument = (
+                    not self._first_batch_timing_done
+                    and current_epoch == start_epoch
+                    and batch_idx == 1
+                )
 
+                load_start = time.perf_counter() if instrument else 0.0
+                try:
+                    batch = next(batch_iter)
+                except StopIteration:
+                    break
+                load_dt = time.perf_counter() - load_start if instrument else 0.0
+
+                to_gpu_start = time.perf_counter() if instrument else 0.0
+                image = batch["image"].to(self.device, non_blocking=True)
+                label = batch["label"].to(self.device, non_blocking=True)
+                if instrument and self.device.type == "cuda":
+                    torch.cuda.synchronize()
+                to_gpu_dt = time.perf_counter() - to_gpu_start if instrument else 0.0
+
+                fwd_start = time.perf_counter() if instrument else 0.0
+                with _autocast_context(self.device, self.amp_enabled):
+                    raw_output = self.model(image)
+                    if isinstance(raw_output, list):
+                        loss = (
+                            _deep_supervision_loss(self.base_loss, raw_output, label)
+                            / self.grad_accum_steps
+                        )
+                    else:
+                        loss = (
+                            self.base_loss(_model_output_for_loss(raw_output), label)
+                            / self.grad_accum_steps
+                        )
+                if instrument and self.device.type == "cuda":
+                    torch.cuda.synchronize()
+                fwd_dt = time.perf_counter() - fwd_start if instrument else 0.0
+
+                bwd_start = time.perf_counter() if instrument else 0.0
                 self.scaler.scale(loss).backward()
+                if instrument and self.device.type == "cuda":
+                    torch.cuda.synchronize()
+                bwd_dt = time.perf_counter() - bwd_start if instrument else 0.0
+
+                if instrument:
+                    self._log_first_batch_timing(load_dt, to_gpu_dt, fwd_dt, bwd_dt)
+
                 running_loss += float(loss.detach().cpu()) * self.grad_accum_steps
                 n_loss_terms += 1
                 pending_backward += 1

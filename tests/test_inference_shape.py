@@ -23,7 +23,10 @@ def _trainer_cfg(tmp_path: Path):
             "data": {"target_spacing": [1.0, 1.0, 1.0]},
             "model": {
                 "loss": {
-                    "name": "dice_focal",
+                    "name": "focal_tversky",
+                    "alpha": 0.3,
+                    "beta": 0.7,
+                    "gamma": 1.333,
                     "to_onehot_y": True,
                     "softmax": True,
                     "include_background": False,

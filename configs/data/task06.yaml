@@ -3,7 +3,7 @@ name: task06
 root: data/raw/Task06_Lung
 dataset_json: ${data.root}/dataset.json
 
-# GroupKFold a nivel de paciente con estratificación aproximada basada en volumen (B2).
+# GroupKFold a nivel de paciente con estratificación aproximada basada en volumen.
 n_folds: 5
 splits_dir: data/splits
 
@@ -11,26 +11,30 @@ splits_dir: data/splits
 # tenga un significado físico consistente en todos los casos.
 target_spacing: [0.79, 0.79, 1.24]
 
-# Ventana de recorte HU para CT de tórax.
-# NOTA: a_max se aumentó de 325 a 400 para retener la señal de costillas calcificadas y
-# tejido blando denso en el ápice pulmonar.
-hu_clip:
-  a_min: -1024
-  a_max: 400
-  b_min: 0.0
-  b_max: 1.0
-  clip: true
+# Multi-ventana HU (sustituye a hu_clip).
+# Cada ventana se normaliza a [0, 1] y produce un canal independiente.
+hu_windows:
+  - [-1000, 0]      # pulmón
+  - [-150, 250]     # mediastino
+  - [-1024, 400]    # completa
 
-# Recorte y muestreo (B2 materializará esto en transformaciones de MONAI).
+# Pre-procesamiento con máscara pulmonar: requerido. Pre-computa con
+# `lungseg precompute-lung-masks`.
+lung_mask:
+  cache_dir: data/cache/lung_masks
+  fill_value: -1024.0   # HU para voxels fuera de la máscara
+
 crop_foreground:
   source_key: image
-  threshold: 0.1
+  # Umbral HU absoluto aplicado tras la máscara pulmonar y antes del ventaneo.
+  # Fuera de pulmón queda en -1024 HU, así que x > -1024 recorta al pulmón.
+  threshold: -1024.0
 sampler:
   pos: 3
   neg: 1
   num_samples: 4
 
-# Estrategia de caché. Usando el modo 'ram' para aprovechar la memoria del sistema.
+# Estrategia de caché. RAM por defecto para evitar el cuello de botella de disco.
 cache:
   mode: ram
   rate: 1.0

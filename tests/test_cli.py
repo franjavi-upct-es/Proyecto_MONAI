@@ -43,29 +43,16 @@ def test_build_loaders_falls_back_when_cache_dataset_is_unavailable(
     assert val_loader.dataset.__class__.__name__ == "Dataset"
 
 
-def test_build_loaders_defaults_to_persistent_dataset() -> None:
-    """Verifica que ahora el valor por defecto es PersistentDataset (caché en disco)."""
+def test_default_cache_mode_resolves_to_ram() -> None:
+    """Tras el refactor 2.5D el caché por defecto es RAM."""
+    from lungseg.data.datamodule import _cache_mode
+
     config_dir = str((_repo_root() / "configs").resolve())
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="sanity")
 
-    train_loader, val_loader = build_loaders(cfg, fold=0, repo_root=_repo_root())
-
-    # Tras nuestro ajuste de "punto medio", el valor por defecto es PersistentDataset
-    assert train_loader.dataset.__class__.__name__ == "PersistentDataset"
-    assert val_loader.dataset.__class__.__name__ == "PersistentDataset"
-
-
-# def test_local_training_profile_is_middle_ground_for_performance() -> None:
-#     """Verifica que el perfil local usa el 'punto medio' de 2 workers."""
-#     config_dir = str((_repo_root() / "configs").resolve())
-#     with initialize_config_dir(config_dir=config_dir, version_base=None):
-#         cfg = compose(config_name="config", overrides=["training=local_5060"])
-
-#     assert int(cfg.training.num_workers) == 4
-#     assert bool(cfg.training.pin_memory) is True
-#     assert float(cfg.data.cache.rate) == 1.0
-#     assert int(cfg.data.cache.num_workers) == 4
+    assert _cache_mode(cfg, cache_rate=1.0) == "ram"
+    assert str(cfg.data.cache.mode) == "ram"
 
 
 def test_build_loaders_supports_persistent_disk_cache(monkeypatch, tmp_path: Path) -> None:

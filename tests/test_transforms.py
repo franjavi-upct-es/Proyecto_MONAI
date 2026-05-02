@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from monai.transforms import RandFlipd
+from monai.transforms import CropForegroundd, RandFlipd
 from omegaconf import OmegaConf
 
-from lungseg.data.transforms import build_train_transforms, build_val_transforms
+from lungseg.data.transforms import MultiWindowHUd, build_train_transforms, build_val_transforms
 
 
 def _cfg(augment_regime: str = "standard"):
@@ -15,8 +15,16 @@ def _cfg(augment_regime: str = "standard"):
         {
             "data": {
                 "target_spacing": [0.79, 0.79, 1.24],
-                "hu_clip": {"a_min": -1024, "a_max": 400, "b_min": 0.0, "b_max": 1.0, "clip": True},
-                "crop_foreground": {"threshold": 0.1},
+                "hu_windows": [
+                    [-1000, 0],
+                    [-150, 250],
+                    [-1024, 400],
+                ],
+                "lung_mask": {
+                    "cache_dir": "data/cache/lung_masks",
+                    "fill_value": -1024.0,
+                },
+                "crop_foreground": {"threshold": -1024.0},
                 "sampler": {"pos": 2, "neg": 1, "num_samples": 4},
             },
             "training": {
@@ -37,13 +45,59 @@ def test_no_lr_flip_in_train_transforms() -> None:
         assert 0 not in axes, f"RandFlipd has forbidden spatial_axis=0 (LR): {axes}"
 
 
+def test_crop_foreground_before_multi_window() -> None:
+    train_tf = build_train_transforms(_cfg(augment_regime="none"))
+    crop_idx = next(
+        i for i, tr in enumerate(train_tf.transforms) if isinstance(tr, CropForegroundd)
+    )
+    multi_window_idx = next(
+        i for i, tr in enumerate(train_tf.transforms) if isinstance(tr, MultiWindowHUd)
+    )
+    assert crop_idx < multi_window_idx
+
+
+def test_multi_window_does_not_mutate_input_metatensor() -> None:
+    """`MultiWindowHUd` debe construir un MetaTensor nuevo, no mutar el de entrada.
+
+    Si mutara, vivir dentro de `CacheDataset(copy_cache=False)` corrompería el
+    cache (1→3 canales tras la iteración 1) e inflaría la RAM por COW desde los
+    workers — el OOM clásico de mid-training.
+    """
+    import torch
+    from monai.data import MetaTensor
+
+    image = MetaTensor(torch.full((1, 8, 8, 8), -200.0))
+    transform = MultiWindowHUd(keys=("image",))
+    out = transform({"image": image})
+
+    assert tuple(image.shape) == (1, 8, 8, 8), "MultiWindowHUd mutó la entrada"
+    assert tuple(out["image"].shape) == (3, 8, 8, 8)
+    assert out["image"] is not image
+
+
+def test_multi_window_is_non_cacheable() -> None:
+    """`MultiWindowHUd` debe ser tratado como per-sample por CacheDataset.
+
+    Si se ejecutara dentro del cache, el CacheDataset guardaría volúmenes con
+    3 canales float32 en RAM, triplicando la huella y causando OOM en el
+    perfil local_5060. La invariante: la transform hereda de
+    `RandomizableTrait`, que MONAI usa como marcador "no cacheable".
+    """
+    from monai.transforms import RandomizableTrait
+
+    train_tf = build_train_transforms(_cfg(augment_regime="none"))
+    multi_window = next(t for t in train_tf.transforms if isinstance(t, MultiWindowHUd))
+    assert isinstance(multi_window, RandomizableTrait)
+
+
 def test_train_patch_shape(synthetic_blob_paths: dict[str, str]) -> None:
     train_tf = build_train_transforms(_cfg(augment_regime="none"))
     samples = train_tf(synthetic_blob_paths)
     assert isinstance(samples, list)
     assert len(samples) == 4  # cfg.data.sampler.num_samples
     for s in samples:
-        assert s["image"].shape == (1, 96, 96, 96), s["image"].shape
+        # 3 ventanas HU -> 3 canales en 'image'.
+        assert s["image"].shape == (3, 96, 96, 96), s["image"].shape
         assert s["label"].shape == (1, 96, 96, 96), s["label"].shape
         assert hasattr(s["foreground_start_coord"], "numel")
         assert hasattr(s["foreground_end_coord"], "numel")

@@ -1,7 +1,8 @@
 # Fase 4: entrenamiento completo en el fold 0. Criterio de aceptación: DSC >= 0.45.
 name: phase4_full
-max_iterations: 50000
-val_every: 100
-patience: 20            # número de validaciones sin mejora antes de detenerse
-grad_accum_steps: 64
-log_every: 50
+max_iterations: 500
+val_every: 25
+patience: 8
+grad_accum_steps: 8
+log_every: 10
+fixed_iterations: false

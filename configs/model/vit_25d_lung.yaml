@@ -1,19 +1,20 @@
 # configs/model/vit_25d_lung.yaml
 name: vit_25d
-spatial_dims: 3
-in_channels: 1
+in_channels: 3                # ventanas HU (pulmón, mediastino, completa)
 out_channels: 2
-encoder_name: vit_base_patch16_224
+neighbor_context: 2           # K; total slices = 2*K+1 = 5
+encoder_name: vit_base_patch16_224.mae    # pesos MAE explícitos
 pretrained: true
-chunk_size: 1
+freeze_encoder: true
+deep_supervision: true
 grad_checkpointing: true
+encoder_chunk_size: 32          # tope al batch interno del encoder (acota VRAM en sliding window)
 
 loss:
-  name: dice_focal
+  name: focal_tversky
+  alpha: 0.3
+  beta: 0.7
+  gamma: 1.333
   to_onehot_y: true
   softmax: true
   include_background: false
-  squared_pred: true
-  gamma: 2.0
-  lambda_dice: 1.0
-  lambda_focal: 1.0

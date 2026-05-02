@@ -12,8 +12,9 @@ from pathlib import Path
 from monai.data import CacheDataset, DataLoader, Dataset, PersistentDataset
 from omegaconf import DictConfig, OmegaConf
 
+from lungseg.data.lung_mask import lung_mask_path
 from lungseg.data.splits import REPO_ROOT
-from lungseg.data.transforms import build_train_transforms, build_val_transforms
+from lungseg.data.transforms import LUNG_MASK_PATH_KEY, build_train_transforms, build_val_transforms
 from lungseg.utils.logging import get_logger
 from lungseg.utils.seeds import seed_worker
 
@@ -39,18 +40,25 @@ _CACHE_MODE_ALIASES = {
 }
 
 
-def _load_fold(splits_dir: Path, fold: int, repo_root: Path) -> tuple[list[dict], list[dict]]:
+def _load_fold(
+    splits_dir: Path,
+    fold: int,
+    repo_root: Path,
+    lung_mask_dir: Path,
+) -> tuple[list[dict], list[dict]]:
     fold_path = splits_dir / f"fold_{fold}.json"
     payload = json.loads(fold_path.read_text(encoding="utf-8"))
 
     def _absolutize(records: list[dict]) -> list[dict]:
         out = []
         for r in records:
+            image_path = Path(repo_root / r["image"])
             out.append(
                 {
-                    "image": str(repo_root / r["image"]),
+                    "image": str(image_path),
                     "label": str(repo_root / r["label"]),
                     "patient_id": r["patient_id"],
+                    LUNG_MASK_PATH_KEY: str(lung_mask_path(image_path, lung_mask_dir)),
                 }
             )
         return out
@@ -94,6 +102,16 @@ def _plain_datasets(
     return Dataset(data=train_files, transform=train_tf), Dataset(data=val_files, transform=val_tf)
 
 
+def _resolve_lung_mask_dir(cfg: DictConfig, repo_root: Path) -> Path:
+    raw = "data/cache/lung_masks"
+    if "data" in cfg and "lung_mask" in cfg.data:
+        raw = str(cfg.data.lung_mask.get("cache_dir", raw))
+    path = Path(raw)
+    if not path.is_absolute():
+        path = repo_root / path
+    return path
+
+
 def build_loaders(
     cfg: DictConfig,
     fold: int,
@@ -101,8 +119,9 @@ def build_loaders(
 ) -> tuple[DataLoader, DataLoader]:
     repo_root = repo_root or REPO_ROOT
     splits_dir = repo_root / cfg.paths.splits if "paths" in cfg else repo_root / "data" / "splits"
+    lung_mask_dir = _resolve_lung_mask_dir(cfg, repo_root)
 
-    train_files, val_files = _load_fold(splits_dir, fold, repo_root)
+    train_files, val_files = _load_fold(splits_dir, fold, repo_root, lung_mask_dir)
     train_tf = build_train_transforms(cfg)
     val_tf = build_val_transforms(cfg)
 
@@ -167,14 +186,16 @@ def build_loaders(
         prefetch_factor=prefetch_factor,
         worker_init_fn=seed_worker,
     )
+    # Val corre cada N steps sobre ~13 volúmenes; los workers solo añaden
+    # presión COW sobre el cache (cada fork copia páginas en escritura). 0
+    # workers es la opción correcta: latencia cero al iniciar val y memoria
+    # constante.
     val_loader = DataLoader(
         val_ds,
         batch_size=1,
         shuffle=False,
-        num_workers=num_workers,
+        num_workers=0,
         pin_memory=True,
-        persistent_workers=persistent_workers,
-        prefetch_factor=prefetch_factor,
         worker_init_fn=seed_worker,
     )
     return train_loader, val_loader

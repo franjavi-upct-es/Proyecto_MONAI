@@ -2,6 +2,101 @@
 
 ## [Sin publicar]
 
+### Fix de OOM de VRAM en validación sliding-window (2026-05-02)
+
+- En sliding-window inference la ventana es `(B, 3, H, W, full_D)` con
+  `full_D ≈ 200`. `_build_neighbor_stack` producía `(B*200, 15, 224, 224)` y el
+  encoder ViT-Base recibía 200-400 slices en un solo pase: las matrices Q/K/V
+  de la atención (`~720 MB` cada una en bf16) saturaban los 8 GB de la
+  RTX 5060.
+- Solución:
+  - `ViT25D` reincorpora un parámetro `encoder_chunk_size` (default 32) que
+    trocea el batch interno del encoder. Equivalente numérico al pase entero
+    (test `test_encoder_chunking_matches_unchunked_output`); en train con
+    patch_d=16 corresponde a 1 chunk; en val con D=200 corresponde a ~7.
+  - `local_5060.yaml`: `inference.sw_batch_size` baja de 2 a 1 (cada ventana
+    ya empaca todos los slices Z; >1 multiplica VRAM linealmente).
+  - `vit_25d_lung.yaml`: nuevo campo `encoder_chunk_size: 32`.
+
+### Fix de OOM en cache durante Phase 4 (2026-05-02)
+
+Dos bugs encadenados — el primero saturaba la RAM antes de empezar; el segundo
+la inflaba durante el entrenamiento.
+
+- **Cache infla a 3 canales (pre-training)**: `MultiWindowHUd` se aplicaba
+  dentro del bloque cacheable de `_pre_transforms`, así que `CacheDataset`
+  guardaba 3 canales `float32` por volumen completo en RAM (~120 MB x 3 x 63 ≈
+  22 GB). Solución: `MultiWindowHUd` hereda ahora de `RandomizableTrait` y se
+  mueve fuera de `_pre_transforms`. En train se aplica después del sampler
+  (sobre patches 96x96x16); en val se ejecuta como per-sample (no cacheable).
+  El cache vuelve a 1 canal por volumen (~2 GB total).
+- **Mutación in-place del MetaTensor cacheado (mid-training)**: tanto
+  `MultiWindowHUd` como `MaskNonLungVoxelsd` llamaban a
+  `MetaTensor.set_array(...)` sobre el tensor de entrada, que vive dentro del
+  cache cuando `CacheDataset(copy_cache=False)`. La mutación en cada
+  `__getitem__` corrompía el cache (1→3 canales) y, peor, en cada worker forked
+  disparaba COW sobre las páginas afectadas, replicando el cache N veces hasta
+  agotar RAM en mitad del entrenamiento. Solución: ambos transforms construyen
+  ahora un `MetaTensor` nuevo (`MetaTensor(stacked); copy_meta_from(image)`) y
+  no tocan el de entrada.
+- **val_loader con `num_workers=0`**: la validación corre cada N steps sobre
+  ~13 volúmenes; los workers solo añadían presión COW sin ganancia. El
+  `train_loader` mantiene `num_workers` desde la config.
+- Tests añadidos:
+  - `test_multi_window_is_non_cacheable` valida que MONAI lo trata como
+    per-sample.
+  - `test_multi_window_does_not_mutate_input_metatensor` valida que el shape
+    de la entrada no cambia tras la transformación.
+
+### Refactor 2.5D real con prior anatómico (2026-05-02)
+
+- **Modelo `ViT25D` reescrito**: cada predicción usa contexto multi-slice
+  apilando `2K+1=5` slices vecinos como canales (con replicate padding en los
+  bordes Z). Combinado con 3 ventanas HU, el ViT recibe 15 canales por slice.
+  Encoder pre-entrenado MAE explícito (`vit_base_patch16_224.mae`) con
+  adaptación del primer conv: pesos RGB promediados y reescalados a 15
+  canales para preservar el conocimiento pre-entrenado. Se elimina el
+  parámetro `chunk_size` (sin uso real).
+- **Deep supervision**: el decoder expone tres cabezas (full / 1/2 / 1/4 en
+  XY; Z se conserva). El trainer combina las pérdidas con pesos
+  `[1.0, 0.5, 0.25]`; sliding-window inference sigue usando solo la cabeza
+  principal vía `_main_output`.
+- **Multi-ventana HU**: nuevo transform `MultiWindowHUd` que sustituye al
+  `ScaleIntensityRanged`. Genera 3 canales (pulmón / mediastino / completa)
+  con saturación dura. `hu_clip` queda fuera del flujo y de `task06.yaml`.
+- **Máscara pulmonar como prior duro**: nuevo módulo
+  `lungseg.data.lung_mask` con `compute_lung_mask` (lungmask R231) y caché
+  idempotente bajo `data/cache/lung_masks/<patient_id>.nii.gz`. Nuevo
+  transform `MaskNonLungVoxelsd` aplicado tras `Spacingd` que reemplaza por
+  -1024 HU los voxels no-pulmón. Nuevo subcomando CLI
+  `lungseg precompute-lung-masks`. Dependencia `lungmask>=0.2.16` añadida a
+  `pyproject.toml`.
+- **Pérdida `FocalTverskyLoss`** (alpha=0.3, beta=0.7, gamma=4/3) sustituye
+  a `DiceFocalLoss`; los falsos negativos se penalizan 7/3 veces más que los
+  falsos positivos. Eliminados `lambda_dice`, `lambda_focal`, `squared_pred`.
+- **Diagnóstico y velocidad del trainer**:
+  - Log de parámetros al construir (`trainable / total / frozen %`).
+  - Timing del primer batch (`load / to_gpu / fwd / bwd`) una sola vez.
+  - Freeze del encoder garantizado al construir el trainer (no sólo en el
+    unfreeze) — corrige un bug previo donde el encoder quedaba entrenable
+    por defecto.
+- **Configs ajustadas**:
+  - `phase4_full.yaml`: `max_iterations=500`, `val_every=25`, `patience=8`,
+    `grad_accum_steps=8`, `log_every=10`.
+  - `local_5060.yaml`: `patch_size=[96,96,16]`, `num_workers=4`,
+    `inference.overlap=0.0`, `warmup_steps=100`. Override explícito a RAM.
+  - `task06.yaml`: bloque `hu_windows` (3 ventanas) + `lung_mask`
+    (cache_dir, fill_value=-1024). `cache.mode=ram` por defecto.
+  - `vit_25d_lung.yaml`: nuevos campos `neighbor_context=2`,
+    `freeze_encoder=true`, `deep_supervision=true`, encoder MAE explícito.
+  - `Makefile`: `PHASE4_CACHE_MODE` y `PHASE6_CACHE_MODE` por defecto a `ram`.
+- **Tests nuevos**: `test_lung_mask_transform.py`, `test_multi_window.py`,
+  `test_focal_tversky.py`, `test_neighbor_stack.py`. `test_vit_25d.py`
+  reescrito (5 tests) cubriendo forward shapes, deep supervision, freeze y
+  init MAE. `tests/conftest.py` materializa una máscara pulmonar sintética
+  para no romper el pipeline. Tests de transforms y loss adaptados a la
+  nueva config.
+
 ### Fixes y mejoras
 
 - **Dependencias**: Se fijó la versión de `Pillow==10.4.0` en los requisitos de instalación al detectar GPUs P100 (`P100_TORCH_REQUIREMENTS`) en los notebooks y scripts de Kaggle para evitar el error `ImportError: cannot import name '_Ink' from 'PIL._typing'` causado por incompatibilidad con las versiones más recientes de Pillow.

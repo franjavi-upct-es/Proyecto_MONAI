@@ -12,12 +12,15 @@ def build_vit_25d(cfg: DictConfig) -> ViT25D:
     """Construye ViT25D desde la configuración."""
     model_cfg = cfg.model if "model" in cfg else cfg
     return ViT25D(
-        in_channels=int(model_cfg.get("in_channels", 1)),
+        in_channels=int(model_cfg.get("in_channels", 3)),
         out_channels=int(model_cfg.get("out_channels", 2)),
-        encoder_name=str(model_cfg.get("encoder_name", "vit_base_patch16_224")),
+        neighbor_context=int(model_cfg.get("neighbor_context", 2)),
+        encoder_name=str(model_cfg.get("encoder_name", "vit_base_patch16_224.mae")),
         pretrained=bool(model_cfg.get("pretrained", True)),
-        chunk_size=int(model_cfg.get("chunk_size", 2)),
+        freeze_encoder=bool(model_cfg.get("freeze_encoder", True)),
+        deep_supervision=bool(model_cfg.get("deep_supervision", True)),
         grad_checkpointing=bool(model_cfg.get("grad_checkpointing", False)),
+        encoder_chunk_size=int(model_cfg.get("encoder_chunk_size", 32)),
     )
 
 

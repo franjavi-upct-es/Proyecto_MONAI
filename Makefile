@@ -9,7 +9,7 @@ SHELL := /bin/bash
 
 UV ?= uv
 UV_SYNC_FLAGS ?= --locked
-EXTRAS ?= --extra dev --extra radiomics
+EXTRAS ?= --all-extras
 
 PYTHON := $(UV) run python
 LUNGSEG := $(UV) run python -m lungseg.cli
@@ -26,35 +26,36 @@ TRAINING ?= local_5060
 MODEL ?= vit_25d_lung
 FOLD ?= 0
 
-# Nuevas variables para SSL
+# Estrategia de freeze/unfreeze del encoder MAE pre-entrenado.
+# `-1` (default) = encoder congelado durante toda la ejecución.
 UNFREEZE_EPOCH ?= -1
 UNFREEZE_LR_FACTOR ?= 0.1
-SSL_CHECKPOINT ?=
 
 TASK06_ROOT ?= data/raw/Task06_Lung
 TASK06_JSON ?= $(TASK06_ROOT)/dataset.json
 SPLITS_DIR ?= data/splits
+LUNG_MASK_DIR ?= data/cache/lung_masks
 LIDC_MANIFEST ?= data/processed/lidc/nodule_manifest.csv
 
 RUN_ID := $(shell date +%Y%m%d-%H%M%S)
 OUTPUTS_ROOT ?= outputs/full-pipeline/$(RUN_ID)
 
-# Variables de rendimiento
+# Variables de rendimiento Phase 4 / Phase 6.
 PHASE4_MAX_ITER ?=
 PHASE4_VAL_EVERY ?=
 PHASE4_PATIENCE ?=
 PHASE4_RESUME_FROM ?=
 PHASE4_SW_BATCH_SIZE ?=
-PHASE4_CACHE_MODE ?= disk
+PHASE4_CACHE_MODE ?= ram
 PHASE4_CACHE_RATE ?= 1.0
-PHASE4_CACHE_WORKERS ?= 2
-PHASE4_NUM_WORKERS ?= 2
+PHASE4_CACHE_WORKERS ?= 4
+PHASE4_NUM_WORKERS ?= 4
 PHASE4_PIN_MEMORY ?= true
 PHASE6_MAX_ITER ?=
 PHASE6_VAL_EVERY ?=
 PHASE6_PATIENCE ?=
 PHASE6_SW_BATCH_SIZE ?=
-PHASE6_CACHE_MODE ?= disk
+PHASE6_CACHE_MODE ?= ram
 SANITY_MAX_ITER ?= 20
 SANITY_VAL_EVERY ?= 10
 
@@ -67,29 +68,34 @@ IMAGE ?=
 PRED_OUT ?= $(OUTPUTS_ROOT)/prediction.nii.gz
 PHASE5_E2E ?= 0
 
-.PHONY: help bootstrap install check-uv check-data check-splits doctor qa lint test smoke smoke-ssl
-.PHONY: splits phase4-fold phase4-all phase6 phase5 predict-one pipeline full summary
+.PHONY: help bootstrap install check-uv check-data check-splits check-lung-masks doctor qa lint test
+.PHONY: smoke smoke-unfreeze splits precompute-masks phase4-fold phase4-all phase6 phase5
+.PHONY: predict-one pipeline full summary
 
 help:
-	@printf "\nlungseg Makefile (uv)\n"
-	printf "=====================\n\n"
+	@printf "\nlungseg Makefile (uv) — pipeline 2.5D ViT con prior pulmonar\n"
+	printf "===========================================================\n\n"
 	printf "Targets principales:\n"
-	printf "  make bootstrap      Instala el entorno con uv (%s %s).\n" "$(UV_SYNC_FLAGS)" "$(EXTRAS)"
-	printf "  make doctor         Comprueba uv, Task06 y splits.\n"
-	printf "  make qa             Ejecuta ruff + pytest con uv.\n"
-	printf "  make smoke          Run corto de sanity sobre un batch real.\n"
-	printf "  make smoke-ssl      Prueba de integracion para ViT SSL y Hybrid Ensemble.\n"
-	printf "  make splits         Regenera data/splits/fold_{0..4}.json desde Task06.\n"
-	printf "  make phase4-all     Entrena Phase 4 en folds: %s.\n" "$(PHASE4_FOLDS)"
-	printf "  make phase6         Ejecuta sweep de ablacion en folds: %s.\n" "$(PHASE6_FOLDS)"
-	printf "  make pipeline       Todo Task06 de principio a fin.\n"
-	printf "  make summary        Muestra summaries bajo OUTPUTS_ROOT.\n\n"
-	printf "Uso habitual:\n"
-	printf "  make smoke-ssl MODEL=vit_25d_lung\n"
-	printf "  make phase4-fold FOLD=0 MODEL=vit_25d_lung UNFREEZE_EPOCH=5\n\n"
-	printf "Variables utiles:\n"
-	printf "  MODEL=%s (vit_25d_lung)\n" "$(MODEL)"
+	printf "  make bootstrap          Sincroniza el entorno con uv (%s %s).\n" "$(UV_SYNC_FLAGS)" "$(EXTRAS)"
+	printf "  make doctor             Comprueba uv, Task06, splits y máscaras pulmonares.\n"
+	printf "  make qa                 Ejecuta ruff + pytest con uv.\n"
+	printf "  make precompute-masks   Pre-computa máscaras pulmonares (lungmask R231) en %s.\n" "$(LUNG_MASK_DIR)"
+	printf "  make smoke              Sanity run corto: overfit de 1 batch.\n"
+	printf "  make smoke-unfreeze     Smoke con encoder unfreeze tras 2 epochs.\n"
+	printf "  make splits             Regenera data/splits/fold_{0..4}.json desde Task06.\n"
+	printf "  make phase4-fold FOLD=N Entrena Phase 4 sobre el fold N.\n"
+	printf "  make phase4-all         Entrena Phase 4 en folds: %s.\n" "$(PHASE4_FOLDS)"
+	printf "  make phase6             Sweep de ablación en folds: %s.\n" "$(PHASE6_FOLDS)"
+	printf "  make pipeline           Todo Task06 de principio a fin (incluye máscaras).\n"
+	printf "  make summary            Muestra summaries bajo OUTPUTS_ROOT.\n\n"
+	printf "Pipeline mínimo de Phase 4:\n"
+	printf "  make bootstrap && make splits && make precompute-masks\n"
+	printf "  make phase4-fold FOLD=0\n\n"
+	printf "Variables útiles:\n"
+	printf "  MODEL=%s\n" "$(MODEL)"
+	printf "  TRAINING=%s\n" "$(TRAINING)"
 	printf "  UNFREEZE_EPOCH=%s UNFREEZE_LR_FACTOR=%s\n" "$(UNFREEZE_EPOCH)" "$(UNFREEZE_LR_FACTOR)"
+	printf "  PHASE4_CACHE_MODE=%s (ram|disk|none)\n" "$(PHASE4_CACHE_MODE)"
 	printf "  OUTPUTS_ROOT=%s\n" "$(OUTPUTS_ROOT)"
 
 check-uv:
@@ -122,7 +128,20 @@ check-splits:
 	done
 	if [[ "$$missing" -ne 0 ]]; then exit 1; fi
 
-doctor: check-uv check-data check-splits
+check-lung-masks:
+	@echo "==> Comprobando máscaras pulmonares en $(LUNG_MASK_DIR)"
+	if [[ ! -d "$(LUNG_MASK_DIR)" ]]; then
+		echo "ERROR: $(LUNG_MASK_DIR) no existe. Ejecuta 'make precompute-masks' primero."
+		exit 1
+	fi
+	count=$$(find "$(LUNG_MASK_DIR)" -maxdepth 1 -name '*.nii.gz' | wc -l | tr -d ' ')
+	if [[ "$$count" -eq 0 ]]; then
+		echo "ERROR: no hay máscaras en $(LUNG_MASK_DIR). Ejecuta 'make precompute-masks'."
+		exit 1
+	fi
+	echo "Máscaras pulmonares OK: $$count volúmenes cacheados."
+
+doctor: check-uv check-data check-splits check-lung-masks
 
 lint: check-uv
 	@echo "==> Ruff"
@@ -138,8 +157,12 @@ splits: check-uv check-data
 	@echo "==> Regenerando splits patient-level"
 	$(PYTHON) -c "from pathlib import Path; from lungseg.data.splits import make_splits; paths = make_splits(Path('$(TASK06_JSON)'), Path('$(SPLITS_DIR)'), seed=$(SEED), k=$(N_FOLDS)); print('Splits generados:'); [print(' -', p) for p in paths]"
 
-smoke: check-data check-splits
-	@echo "==> Sanity run corto"
+precompute-masks: check-uv check-data check-splits
+	@echo "==> Pre-computando máscaras pulmonares (lungmask R231) en $(LUNG_MASK_DIR)"
+	$(LUNGSEG) precompute-lung-masks
+
+smoke: check-data check-splits check-lung-masks
+	@echo "==> Sanity run corto (overfit 1 batch)"
 	$(LUNGSEG) train --config-name=$(SANITY_CONFIG) \
 		paths.outputs=$(OUTPUTS_ROOT)/sanity \
 		data.cache.rate=0.0 \
@@ -147,18 +170,18 @@ smoke: check-data check-splits
 		training.sanity.max_iterations=$(SANITY_MAX_ITER) \
 		training.sanity.val_every=$(SANITY_VAL_EVERY)
 
-smoke-ssl: check-data check-splits
-	@echo "==> Prueba SSL/Hybrid con $(MODEL)"
+smoke-unfreeze: check-data check-splits check-lung-masks
+	@echo "==> Smoke con unfreeze del encoder en epoch 2 ($(MODEL))"
 	$(LUNGSEG) train --config-name=$(SANITY_CONFIG) \
 		model=$(MODEL) \
 		training.unfreeze_epoch=2 \
 		training.unfreeze_lr_factor=0.5 \
-		paths.outputs=$(OUTPUTS_ROOT)/smoke-ssl \
+		paths.outputs=$(OUTPUTS_ROOT)/smoke-unfreeze \
 		data.cache.rate=0.0 \
 		training.sanity.max_iterations=10 \
 		training.sanity.val_every=5
 
-phase4-fold: check-data check-splits
+phase4-fold: check-data check-splits check-lung-masks
 	@echo "==> Phase 4 fold $(FOLD) con $(MODEL)"
 	extra=()
 	if [[ -n "$(PHASE4_MAX_ITER)" ]]; then extra+=("experiment.max_iterations=$(PHASE4_MAX_ITER)"); fi
@@ -176,12 +199,12 @@ phase4-fold: check-data check-splits
 		data.cache.rate=$(PHASE4_CACHE_RATE) \
 		"$${extra[@]}"
 
-phase4-all: check-data check-splits
+phase4-all: check-data check-splits check-lung-masks
 	@for fold in $(PHASE4_FOLDS); do
 		$(MAKE) phase4-fold FOLD=$$fold
 	done
 
-phase6: check-data check-splits
+phase6: check-data check-splits check-lung-masks
 	@for fold in $(PHASE6_FOLDS); do
 		for frac in $(FRACTIONS); do
 			for aug in $(AUGS); do
@@ -212,7 +235,7 @@ predict-one: check-uv
 	mkdir -p "$$(dirname "$(PRED_OUT)")"
 	$(LUNGSEG) predict --checkpoint "$(CHECKPOINT)" --image "$(IMAGE)" --output "$(PRED_OUT)"
 
-pipeline: bootstrap splits qa phase4-all phase6 phase5 summary
+pipeline: bootstrap splits precompute-masks qa phase4-all phase6 phase5 summary
 
 full: pipeline
 

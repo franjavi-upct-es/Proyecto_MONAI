@@ -35,7 +35,9 @@ def synthetic_blob_paths(tmp_path: Path, synthetic_blob: dict[str, np.ndarray]) 
     """Materialize the synthetic blob to NIfTI at the configured target spacing.
 
     Spacing matches `cfg.data.target_spacing = (0.79, 0.79, 1.24)` so MONAI's
-    `Spacingd` is a near-no-op and downstream tests stay deterministic.
+    `Spacingd` is a near-no-op and downstream tests stay deterministic. Also
+    materializa una máscara pulmonar sintética que cubre todo el volumen,
+    necesaria para `MaskNonLungVoxelsd`.
     """
     affine = np.eye(4, dtype=np.float64)
     affine[0, 0] = 0.79
@@ -44,6 +46,14 @@ def synthetic_blob_paths(tmp_path: Path, synthetic_blob: dict[str, np.ndarray]) 
 
     img_path = tmp_path / "image.nii.gz"
     lbl_path = tmp_path / "label.nii.gz"
+    mask_path = tmp_path / "lung_mask.nii.gz"
     nib.save(nib.Nifti1Image(synthetic_blob["image"], affine), str(img_path))
     nib.save(nib.Nifti1Image(synthetic_blob["label"].astype(np.uint8), affine), str(lbl_path))
-    return {"image": str(img_path), "label": str(lbl_path), "patient_id": "synthetic"}
+    lung = np.ones_like(synthetic_blob["label"], dtype=np.uint8)
+    nib.save(nib.Nifti1Image(lung, affine), str(mask_path))
+    return {
+        "image": str(img_path),
+        "label": str(lbl_path),
+        "patient_id": "synthetic",
+        "lung_mask_path": str(mask_path),
+    }

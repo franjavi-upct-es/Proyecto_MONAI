@@ -15,13 +15,18 @@ from lungseg.training.schedulers import poly_lr
 def _cfg(model_name: str = "vit_25d"):
     model = {
         "name": model_name,
-        "spatial_dims": 3,
-        "in_channels": 1,
+        "in_channels": 3,
         "out_channels": 2,
-        "encoder_name": "vit_base_patch16_224",
+        "neighbor_context": 2,
+        "encoder_name": "vit_base_patch16_224.mae",
         "pretrained": False,
+        "freeze_encoder": True,
+        "deep_supervision": False,
         "loss": {
-            "name": "dice_focal",
+            "name": "focal_tversky",
+            "alpha": 0.3,
+            "beta": 0.7,
+            "gamma": 1.333,
             "to_onehot_y": True,
             "softmax": True,
             "include_background": False,
@@ -30,10 +35,8 @@ def _cfg(model_name: str = "vit_25d"):
     return OmegaConf.create({"model": model})
 
 
-def test_model_factories_forward_shape() -> None:
-    # 2.5D ViT procesará cortes de profundidad como batch.
-    # 32x32x32 evita problemas de resolución de parches
-    x = torch.randn(1, 1, 32, 32, 32)
+def test_model_factory_forward_shape() -> None:
+    x = torch.randn(1, 3, 32, 32, 32)
     model = build_model(_cfg("vit_25d"))
     model.eval()
     with torch.no_grad():
@@ -41,7 +44,7 @@ def test_model_factories_forward_shape() -> None:
     assert out.shape == (1, 2, 32, 32, 32)
 
 
-def test_dice_focal_loss_perfect_prediction_is_small() -> None:
+def test_focal_tversky_loss_perfect_prediction_is_small() -> None:
     cfg = _cfg()
     loss_fn = build_loss(cfg)
     target = torch.zeros(1, 1, 8, 8, 8, dtype=torch.long)

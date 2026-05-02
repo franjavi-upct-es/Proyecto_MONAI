@@ -21,7 +21,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from lungseg.ablation import analyze, run_cell
 from lungseg.classification import evaluate_pipeline, evaluate_size_only
-from lungseg.data import build_loaders, build_val_transforms
+from lungseg.data import build_loaders, build_val_transforms, compute_lung_mask
 from lungseg.inference import predict_volume
 from lungseg.models import build_model
 from lungseg.radiomics import build_radiomic_dataset
@@ -181,6 +181,50 @@ def ablate(
     report = analyze(Path(str(cfg.paths.outputs)))
     LOGGER.info("ablation cell complete: %s", result["result_path"])
     LOGGER.info("ablation report: %s", report)
+
+
+@app.command("precompute-lung-masks")
+def precompute_lung_masks(
+    config_name: Annotated[str, typer.Option("--config-name")] = "config",
+    overrides: Annotated[list[str] | None, typer.Argument()] = None,
+) -> None:
+    """Pre-computa y cachea máscaras pulmonares (lungmask R231) para todos los splits.
+
+    Idempotente: si la máscara cacheada existe, no la recomputa. Recorre los
+    `n_folds` splits y procesa la unión de imágenes train+val.
+    """
+    cfg = _compose_config(config_name, overrides)
+    repo_root = _repo_root()
+
+    cache_dir_raw = "data/cache/lung_masks"
+    if "data" in cfg and "lung_mask" in cfg.data:
+        cache_dir_raw = str(cfg.data.lung_mask.get("cache_dir", cache_dir_raw))
+    cache_dir = Path(cache_dir_raw)
+    if not cache_dir.is_absolute():
+        cache_dir = repo_root / cache_dir
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    splits_dir = repo_root / str(cfg.paths.splits)
+    n_folds = int(cfg.data.get("n_folds", 5))
+
+    seen: dict[str, Path] = {}
+    for fold in range(n_folds):
+        fold_path = splits_dir / f"fold_{fold}.json"
+        if not fold_path.exists():
+            LOGGER.warning("split missing, skipping: %s", fold_path)
+            continue
+        payload = json.loads(fold_path.read_text(encoding="utf-8"))
+        for record in [*payload.get("train", []), *payload.get("val", [])]:
+            image_rel = record["image"]
+            if image_rel in seen:
+                continue
+            image_abs = repo_root / image_rel
+            seen[image_rel] = image_abs
+
+    LOGGER.info("computing lung masks for %d unique volumes -> %s", len(seen), cache_dir)
+    for idx, (rel, image_abs) in enumerate(sorted(seen.items()), start=1):
+        cache_path = compute_lung_mask(image_abs, cache_dir)
+        LOGGER.info("[%d/%d] %s -> %s", idx, len(seen), rel, cache_path)
 
 
 @app.command()

@@ -24,6 +24,7 @@ dependencies = [
     "matplotlib>=3.7.0",
     "einops>=0.7.0",
     "timm>=1.0.26",
+    "lungmask>=0.2.16",
 ]
 
 [project.optional-dependencies]
