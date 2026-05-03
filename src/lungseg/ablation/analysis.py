@@ -31,6 +31,8 @@ def analyze(outputs_dir: Path) -> Path:
         raise FileNotFoundError(f"no ablation JSON files found in {ablation_dir}")
 
     df = pd.DataFrame(rows)
+    if "best_val_hd95" not in df.columns:
+        df["best_val_hd95"] = float("nan")
     summary = (
         df.groupby(["data_fraction", "augment_regime"], as_index=False)
         .agg(

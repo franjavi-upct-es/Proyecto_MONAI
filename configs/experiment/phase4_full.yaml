@@ -12,3 +12,8 @@ fixed_iterations: false
 # flags si necesitas reanudar entrenamiento desde el último estado.
 save_last_checkpoint: false
 save_resume_state: false
+
+# Tras el entrenamiento, predice sobre el primer caso de val con best.pt y
+# guarda triplanar.png + mosaic.png en <out>/visualizations/. Desactivar en
+# sanity/smoke para evitar pasos extra sobre overfit de 1 batch.
+visualize_post_train: true

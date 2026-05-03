@@ -87,7 +87,11 @@ help:
 	printf "  make phase4-all         Entrena Phase 4 en folds: %s.\n" "$(PHASE4_FOLDS)"
 	printf "  make phase6             Sweep de ablación en folds: %s.\n" "$(PHASE6_FOLDS)"
 	printf "  make pipeline           Todo Task06 de principio a fin (incluye máscaras).\n"
-	printf "  make summary            Muestra summaries bajo OUTPUTS_ROOT.\n\n"
+	printf "  make summary            Lista summaries, gráficas y reports bajo OUTPUTS_ROOT.\n\n"
+	printf "Gráficas que se generan automáticamente:\n"
+	printf "  metrics.png             tras todo entrenamiento (Loss/Dice/HD95)\n"
+	printf "  triplanar.png + mosaic.png  tras phase4-fold y phase4-all (en visualizations/)\n"
+	printf "  ablation_violin.png + ablation_summary.csv + REPORT_ABLATION.md  tras phase6\n\n"
 	printf "Pipeline mínimo de Phase 4:\n"
 	printf "  make bootstrap && make splits && make precompute-masks\n"
 	printf "  make phase4-fold FOLD=0\n\n"
@@ -167,6 +171,7 @@ smoke: check-data check-splits check-lung-masks
 		paths.outputs=$(OUTPUTS_ROOT)/sanity \
 		data.cache.rate=0.0 \
 		data.cache.num_workers=0 \
+		experiment.visualize_post_train=false \
 		training.sanity.max_iterations=$(SANITY_MAX_ITER) \
 		training.sanity.val_every=$(SANITY_VAL_EVERY)
 
@@ -178,6 +183,10 @@ smoke-unfreeze: check-data check-splits check-lung-masks
 		training.unfreeze_lr_factor=0.5 \
 		paths.outputs=$(OUTPUTS_ROOT)/smoke-unfreeze \
 		data.cache.rate=0.0 \
+		data.cache.num_workers=0 \
+		training.num_workers=0 \
+		training.pin_memory=false \
+		experiment.visualize_post_train=false \
 		training.sanity.max_iterations=10 \
 		training.sanity.val_every=5
 
@@ -233,11 +242,21 @@ phase5:
 predict-one: check-uv
 	@if [[ -z "$(CHECKPOINT)" || -z "$(IMAGE)" ]]; then exit 2; fi
 	mkdir -p "$$(dirname "$(PRED_OUT)")"
-	$(LUNGSEG) predict --checkpoint "$(CHECKPOINT)" --image "$(IMAGE)" --output "$(PRED_OUT)"
+	label_arg=()
+	if [[ -n "$(LABEL)" ]]; then label_arg=(--label "$(LABEL)"); fi
+	$(LUNGSEG) predict --checkpoint "$(CHECKPOINT)" --image "$(IMAGE)" \
+		--output "$(PRED_OUT)" --visualize "$${label_arg[@]}"
 
 pipeline: bootstrap splits precompute-masks qa phase4-all phase6 phase5 summary
 
 full: pipeline
 
 summary:
-	@find "$(OUTPUTS_ROOT)" -name summary.json -print | sort | xargs cat
+	@echo "==> Summaries JSON bajo $(OUTPUTS_ROOT)"
+	find "$(OUTPUTS_ROOT)" -name summary.json -print 2>/dev/null | sort | xargs -r cat
+	echo
+	echo "==> Gráficas generadas (.png) bajo $(OUTPUTS_ROOT)"
+	find "$(OUTPUTS_ROOT)" -name '*.png' -print 2>/dev/null | sort
+	echo
+	echo "==> Tablas y reports (.csv/.md) bajo $(OUTPUTS_ROOT)"
+	find "$(OUTPUTS_ROOT)" \( -name '*.csv' -o -name 'REPORT_*.md' \) -print 2>/dev/null | sort

@@ -25,6 +25,8 @@ dependencies = [
     "einops>=0.7.0",
     "timm>=1.0.26",
     "lungmask>=0.2.16",
+    "jupyter>=1.1.1",
+    "tabulate>=0.10.0",
 ]
 
 [project.optional-dependencies]

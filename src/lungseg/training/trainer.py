@@ -171,6 +171,98 @@ def _optimizer_state_to_device(optimizer: torch.optim.Optimizer, device: torch.d
                 state[key] = value.to(device)
 
 
+def _visualize_best(
+    cfg: DictConfig,
+    model: torch.nn.Module,
+    val_loader: Iterable,
+    best_ckpt: Path,
+    out_dir: Path,
+    device: torch.device,
+) -> None:
+    """Carga best.pt y guarda triplanar.png + mosaic.png del primer caso de val."""
+    if not best_ckpt.exists():
+        return
+    try:
+        from lungseg.utils.visualization import (
+            save_segmentation_mosaic,
+            save_triplanar_prediction,
+        )
+    except ImportError:
+        return
+
+    payload = torch.load(best_ckpt, map_location=device)
+    is_partial = bool(payload.get("model_state_is_partial", False))
+    model.load_state_dict(payload["model_state_dict"], strict=not is_partial)
+    model.eval()
+
+    try:
+        batch = next(iter(val_loader))
+    except StopIteration:
+        return
+
+    image, label = _batch_to_device(batch, device)
+    with torch.no_grad(), _autocast_context(device, bool(_select(cfg, "training.amp", False))):
+        logits = predict_volume(model, image, cfg)
+    pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype("uint8")
+
+    img_np = image.squeeze().cpu().numpy()
+    if img_np.ndim == 4:
+        img_np = img_np[0]
+    lab_np = label.squeeze().cpu().numpy().astype("uint8")
+    if lab_np.ndim == 4:
+        lab_np = lab_np[0]
+
+    vis_dir = out_dir / "visualizations"
+    vis_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        save_triplanar_prediction(img_np, lab_np, pred, vis_dir / "triplanar.png")
+        save_segmentation_mosaic(img_np, pred, vis_dir / "mosaic.png")
+        LOGGER.info("post-train visualizations → %s", vis_dir)
+    except Exception as exc:
+        LOGGER.warning("post-train visualization failed: %s", exc)
+    finally:
+        model.train()
+
+
+def _plot_metrics(csv_path: Path) -> None:
+    """Guarda metrics.png con curvas de loss, Dice y HD95 junto al CSV."""
+    rows = _read_metrics_csv(csv_path)
+    if not rows:
+        return
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+
+    epochs = [r["epoch"] for r in rows]
+    loss   = [r["train_loss"] for r in rows]
+    dice   = [r["val_dice"]   for r in rows]
+    hd95   = [r["val_hd95"]   for r in rows]
+
+    fig, axes = plt.subplots(1, 3, figsize=(13, 4))
+
+    axes[0].plot(epochs, loss,  color="#4c78a8")
+    axes[0].set_title("Train Loss")
+    axes[0].set_xlabel("Epoch")
+
+    axes[1].plot(epochs, dice,  color="#54a24b")
+    axes[1].set_title("Val Dice")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylim(0, 1)
+
+    axes[2].plot(epochs, hd95,  color="#e45756")
+    axes[2].set_title("Val HD95 (mm)")
+    axes[2].set_xlabel("Epoch")
+
+    fig.tight_layout()
+    out = csv_path.with_name("metrics.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    LOGGER.info("metrics plot → %s", out)
+
+
 def _write_metrics_csv(path: Path, rows: list[dict[str, float | int]]) -> None:
     if not rows:
         return
@@ -868,12 +960,19 @@ class Trainer:
         summary = {
             "best_epoch": int(best_epoch),
             "best_val_dice": _finite_or_none(best_dice),
+            "best_val_hd95": _finite_or_none(best_hd95),
             "checkpoint_path": str(self.best_ckpt),
             "last_step": int(global_step),
             "last_checkpoint_path": str(self.last_ckpt) if self.save_last_checkpoint else None,
             "metrics_path": str(self.metrics_path),
         }
         self.summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        _plot_metrics(self.metrics_path)
+        if bool(_select(self.cfg, "experiment.visualize_post_train", True)):
+            _visualize_best(
+                self.cfg, self.model, self.val_loader,
+                self.best_ckpt, self.out_dir, self.device,
+            )
         if self.wandb_run is not None:
             self.wandb_run.finish()
         return summary

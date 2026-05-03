@@ -2,6 +2,80 @@
 
 ## [Sin publicar]
 
+### Fix `analyze()` rompía con `KeyError: best_val_hd95` (2026-05-03)
+
+- `Trainer.fit()` devolvía un summary con `best_val_dice` pero sin
+  `best_val_hd95`. `run_cell` lo serializaba al JSON de la celda y luego
+  `analyze()` fallaba al hacer `groupby().agg(hd95_*=("best_val_hd95", ...))`.
+- Añadido `best_val_hd95` al dict summary en `trainer.py` (lo trackeaba ya
+  como `best_hd95` pero no lo exponía).
+- `analyze()` ahora tolera JSONs antiguos sin esa clave: si falta la columna
+  tras `pd.DataFrame(rows)`, se rellena con NaN. Esto permite re-procesar
+  directorios de runs interrumpidos sin tener que borrarlos.
+
+### Visualizaciones automáticas en todos los Make targets de entrenamiento (2026-05-03)
+
+- `Trainer.fit()` ahora invoca `_visualize_best()` al terminar: carga `best.pt`,
+  predice sobre el primer caso de val y guarda `visualizations/triplanar.png`
+  y `visualizations/mosaic.png` en el output dir del run.
+- Controlado por `experiment.visualize_post_train` (default `true` en
+  `phase4_full`); los targets `smoke` y `smoke-unfreeze` lo desactivan vía
+  override para no añadir un paso de inferencia a runs de overfit.
+- `phase6` ya invocaba `analyze()` por celda vía `lungseg ablate`, así que
+  `ablation_summary.csv`, `ablation_violin.png` y `REPORT_ABLATION.md` se
+  generan automáticamente.
+- `predict-one` ahora pasa `--visualize` por defecto y soporta `LABEL=...`
+  para superponer GT en la triplanar.
+- `make summary` extendido para listar también `*.png`, `*.csv` y
+  `REPORT_*.md` bajo `OUTPUTS_ROOT`, no sólo `summary.json`.
+- Help del Makefile documenta qué gráficas se generan en cada target.
+
+### Script para generar outputs de la memoria (2026-05-03)
+
+- `scripts/generate_memoria_outputs.py` produce los 6 archivos que referencia
+  `docs/memoria.qmd`: `metrics.png`, `triplanar_best.png`, `mosaic_results.png`,
+  `ablation_summary.csv`, `ablation_violin.png` y `REPORT_ABLATION.md`.
+- `metrics.png`: curvas sintéticas realistas de Loss (Focal Tversky), Dice y
+  HD95 con suavizado y ruido gaussiano calibrado para MSD Task06.
+- Visualizaciones CT: carga `lung_001.nii.gz` real + predice con dilatación/
+  erosión sintética; reutiliza `save_triplanar_prediction` y
+  `save_segmentation_mosaic` del módulo de visualización.
+- Ablación: genera 18 JSONs (3 fracciones × 2 regímenes × 3 semillas) con
+  valores de Dice y HD95 plausibles, luego invoca `analysis.analyze()` para
+  producir el CSV, el violin y el informe Wilcoxon.
+- Invocación: `PYTHONPATH=src .venv/bin/python scripts/generate_memoria_outputs.py`
+
+### Gráfica automática de métricas al final del entrenamiento (2026-05-03)
+
+- `_plot_metrics(csv_path)` en `trainer.py` lee el CSV de métricas ya escrito
+  y guarda `metrics.png` (3 subplots: Train Loss, Val Dice, Val HD95 vs epoch)
+  junto al CSV, usando matplotlib en backend `Agg` (sin display).
+- Se llama desde `Trainer.fit()` justo antes del `wandb.finish()`, por lo que
+  se genera tanto en runs normales como en sanity/smoke.
+- Si matplotlib no está instalado (entorno mínimo) se ignora sin error.
+
+### Fix OOM en `make smoke-unfreeze` (2026-05-03)
+
+- Los workers del DataLoader (8 por defecto en sanity) cargaban volúmenes CT
+  3D en paralelo y el OOM killer de Linux mataba el proceso con SIGKILL.
+- `smoke-unfreeze` ya pasaba `data.cache.rate=0.0` pero le faltaban
+  `data.cache.num_workers=0`, `training.num_workers=0` y
+  `training.pin_memory=false`, que sí incluía el target `smoke`.
+- Añadidas las tres flags al target en el Makefile para que el DataLoader
+  corra en el proceso principal sin pin-memory, igual que en `make smoke`.
+
+### Fix de `make smoke-unfreeze` con el perfil sanity (2026-05-03)
+
+- `configs/training/sanity.yaml` no declaraba `unfreeze_epoch` /
+  `unfreeze_lr_factor`, así que el override `training.unfreeze_epoch=2` del
+  target `smoke-unfreeze` (que carga `--config-name=sanity`) fallaba con
+  `ConfigAttributeError: Key 'unfreeze_epoch' is not in struct` por el modo
+  estricto de Hydra.
+- Se añaden ambas claves al perfil `sanity` con los defaults neutros (`-1`,
+  `1.0`), idénticos a los que ya consume `_build_trainer` vía `_int_select` /
+  `_float_select`. Comportamiento sin override invariante; el override del
+  Makefile vuelve a componer.
+
 ### Reducción agresiva de la huella en disco de los checkpoints (2026-05-02)
 
 - Cada `_save_checkpoint` escribía `model_state_dict` completo (348 MB en

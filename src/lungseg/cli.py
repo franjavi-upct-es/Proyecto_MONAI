@@ -182,7 +182,10 @@ def ablate(
     cfg = _compose_config(config_name, effective_overrides)
     result = run_cell(cfg)
     report = analyze(Path(str(cfg.paths.outputs)))
-    LOGGER.info("ablation cell complete: %s", result["result_path"])
+    if result.get("skipped"):
+        LOGGER.info("ablation cell SKIPPED (already complete): %s", result["result_path"])
+    else:
+        LOGGER.info("ablation cell complete: %s", result["result_path"])
     LOGGER.info("ablation report: %s", report)
 
 

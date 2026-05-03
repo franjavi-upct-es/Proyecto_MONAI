@@ -72,7 +72,12 @@ def _write_fractional_split(cfg: DictConfig, fraction: float, seed: int) -> Path
 
 
 def run_cell(cfg: DictConfig) -> dict:
-    """Ejecuta una celda de ablación y escribe un resultado en formato JSON."""
+    """Ejecuta una celda de ablación y escribe un resultado en formato JSON.
+
+    Idempotente: si el JSON de la celda ya existe y tiene `best_val_dice` y
+    `best_val_hd95`, se devuelve sin reentrenar. Para forzar el rerun, ajusta
+    `experiment.force_rerun=true` o borra el JSON.
+    """
     seed = int(_cell_value(cfg, "seed", 42))
     fraction = float(_cell_value(cfg, "data_fraction", 1.0))
     augment_regime = str(
@@ -83,6 +88,19 @@ def run_cell(cfg: DictConfig) -> dict:
     OmegaConf.update(cell_cfg, "seed", seed, merge=False)
     OmegaConf.update(cell_cfg, "training.augment_regime", augment_regime, merge=False)
     OmegaConf.update(cell_cfg, "experiment.fixed_iterations", True, force_add=True)
+
+    out_dir = _outputs_dir(cell_cfg) / "ablation"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"frac_{fraction:g}_aug_{augment_regime}_seed_{seed}.json"
+
+    force_rerun = bool(_select(cfg, "experiment.force_rerun", False))
+    if out_path.exists() and not force_rerun:
+        existing = json.loads(out_path.read_text(encoding="utf-8"))
+        if "best_val_dice" in existing and "best_val_hd95" in existing:
+            existing["result_path"] = str(out_path)
+            existing["skipped"] = True
+            return existing
+
     split_dir = _write_fractional_split(cell_cfg, fraction=fraction, seed=seed)
     OmegaConf.update(cell_cfg, "paths.splits", str(split_dir), merge=False)
 
@@ -95,9 +113,6 @@ def run_cell(cfg: DictConfig) -> dict:
         "augment_regime": augment_regime,
         **summary,
     }
-    out_dir = _outputs_dir(cell_cfg) / "ablation"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"frac_{fraction:g}_aug_{augment_regime}_seed_{seed}.json"
     out_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     result["result_path"] = str(out_path)
     return result

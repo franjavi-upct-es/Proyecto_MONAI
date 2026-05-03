@@ -4,10 +4,9 @@ Pipeline de segmentación de tumores NSCLC en TC (MSD Task06_Lung, 64 casos)
 construido sobre MONAI 1.5+, con extensiones para clasificación radiómica /
 profunda en LIDC-IDRI (Fase 5) y un estudio de ablación (Fase 6).
 
-El paquete `src/lungseg/` reemplaza la base de código previa
-`scripts/monai_pipeline/` que alcanzó un máximo de DSC ≈ 0.14 con los síntomas
-diagnosticados en [REPORT_DIAGNOSIS.md](REPORT_DIAGNOSIS.md). El nuevo paquete
-es impulsado por Hydra y cubierto por tests.
+El paquete `src/lungseg/` está impulsado por Hydra, cubierto por tests, y
+todas las modificaciones de la pipeline quedan registradas en
+[CHANGELOG.md](CHANGELOG.md).
 
 ## Arquitectura del segmentador (Phase 4)
 
@@ -19,15 +18,28 @@ es impulsado por Hydra y cubierto por tests.
   (pulmón / mediastino / completa) normalizadas a `[0, 1]` como canales.
 - **Modelo**: para cada slice axial `z`, se apilan los 5 vecinos
   `[z-2, ..., z+2]` × 3 ventanas = 15 canales y se pasan a un encoder
-  `vit_base_patch16_224.mae` pre-entrenado (congelado por defecto). El primer
-  conv del `patch_embed` se inicializa promediando los pesos RGB y replicándolos
-  a 15 canales para preservar el conocimiento MAE.
+  `vit_base_patch16_224.mae` pre-entrenado. El primer conv del `patch_embed`
+  se inicializa promediando los pesos RGB y replicándolos a 15 canales para
+  preservar el conocimiento MAE.
+- **Política de freeze/unfreeze**: el encoder MAE se entrena congelado por
+  defecto (`UNFREEZE_EPOCH=-1`). Para descongelarlo a partir de la época `N`
+  con un LR reducido se usa `make smoke-unfreeze` o se ajustan
+  `UNFREEZE_EPOCH` y `UNFREEZE_LR_FACTOR` (default `0.1`) en cualquier target
+  de entrenamiento.
 - **Decoder**: 2D slice-wise con tres cabezas a resoluciones full / 1⁄2 / 1⁄4
   (deep supervision en XY; Z se conserva).
 - **Pérdida**: `FocalTverskyLoss(α=0.3, β=0.7, γ=4/3)` — los falsos negativos
   se penalizan 7/3 veces más que los falsos positivos.
 
 ## Configuración
+
+La ruta recomendada usa `uv` (resolución reproducible vía `uv.lock`):
+
+```bash
+uv sync --locked --all-extras          # equivalente a `make bootstrap`
+```
+
+Como alternativa con `pip`:
 
 ```bash
 pip install -e .[dev]                  # núcleo + herramientas de desarrollo
@@ -86,9 +98,31 @@ python -m lungseg.cli ablate -m experiment=phase6_ablation \
     seed=0,1,2 data_fraction=0.25,0.5,1.0                     # multirun Hydra
 python -m lungseg.cli predict --checkpoint best.pt \
     --image volume.nii.gz --output pred.nii.gz                # inferencia
+python -m lungseg.cli classify --config-name=config           # Phase 5 (LIDC)
 ```
 
-`make doctor` valida que `uv`, Task06, splits y máscaras pulmonares están listos.
+El target `make phase5` envuelve `lungseg classify` con la configuración por
+defecto. `make doctor` valida que `uv`, Task06, splits y máscaras pulmonares
+están listos.
+
+### Perfiles de entrenamiento
+
+Existen tres perfiles bajo [configs/training/](configs/training/) que
+seleccionan batch size, AMP y workers según el hardware:
+
+- `local_5060` — RTX 5060 8 GB (default).
+- `kaggle_p100` — Kaggle / Colab P100 16 GB.
+- `sanity` — overfit de 1 batch para smoke tests.
+
+Se cambian con `TRAINING=kaggle_p100 make phase4-fold FOLD=0` o vía override
+Hydra `training=kaggle_p100`.
+
+### Política de checkpoints
+
+Por defecto Phase 4 sólo persiste `best.pt` (sin estado de optimizer /
+scheduler / scaler) para minimizar el footprint en disco. Para reanudar
+entrenamiento hay que activar `save_last_checkpoint=true` y
+`save_resume_state=true` en la configuración del experimento.
 
 ## Reglas estrictas
 

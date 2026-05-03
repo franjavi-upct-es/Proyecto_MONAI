@@ -8,6 +8,9 @@ amp: true
 pin_memory: true
 resume_from: null
 
+unfreeze_epoch: -1
+unfreeze_lr_factor: 1.0
+
 optimizer:
   name: adamw
   lr: 3.0e-4
