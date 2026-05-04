@@ -1,6 +1,30 @@
 # Changelog
 
-## [Sin publicar]
+### Presentación reveal.js basada en la memoria (2026-05-04)
+
+- Nuevo `docs/presentacion.qmd` con `format: revealjs` que sintetiza el
+  contenido de `docs/memoria.qmd`: motivación, datos, preprocesamiento,
+  arquitectura ViT25D, pérdida, entrenamiento, inferencia, ablación de
+  Fase 6, resultados y discusión.
+- Reutiliza `outputs/{ablation_violin,metrics,triplanar_best,mosaic_results}.png`
+  y `references.bib` ya configurado en `docs/_quarto.yml`.
+- Compilable con `quarto render docs/presentacion.qmd` (genera HTML
+  reveal.js auto-contenido vía `embed-resources: true`).
+- Rediseño orientado a exposición (2026-05-04): bloques de código
+  reemplazados por **diagramas Mermaid** (pipeline general, flujo de
+  tensores ViT25D, neighbor stacking, adaptación de pesos 3→15 canales,
+  decoder con deep supervision, congelación, sliding window slice-wise,
+  chunking, ablación, comparativa 2D/2.5D/3D). Layout en columnas para
+  agrupar concepto + esquema. `transition: none`,
+  `background-transition: none` e `incremental: false` para minimizar
+  animaciones y acelerar el cambio de sección; eliminados los fragments
+  `. . .` que segmentaban contenido.
+- Auto-escalado del contenido (2026-05-04): canvas lógico de reveal.js
+  ampliado a `1600×900` con `margin: 0.04` y `min-scale: 0.2` /
+  `max-scale: 2.0`; `scrollable: false` y bloque `<style>` que fuerza
+  `overflow: hidden`, limita imágenes y SVG (Mermaid) a `max-height: 62vh`
+  y compacta tablas, código, listas y callouts. Ahora cada slide cabe en
+  pantalla sin necesidad de hacer scroll con el ratón.
 
 ### Fix `analyze()` rompía con `KeyError: best_val_hd95` (2026-05-03)
 
