@@ -261,6 +261,16 @@ flowchart LR
 
 Ventanas tras el crop ⇒ caché ligera, no triplica RAM.
 
+## Ventanas HU sobre un corte real
+
+![Mismo corte axial, tres normalizaciones HU + sus histogramas.](imgs/hu_windows.png){width=78%}
+
+- **Pulmón** ($[-1000, 0]$): parénquima y bordes lesión-pulmón.
+- **Mediastino** ($[-150, 250]$): tumor sólido y tejidos blandos.
+- **Completa** ($[-1024, 400]$): contexto anatómico global.
+
+Cada ventana selecciona una franja distinta del histograma → apilarlas evita que el modelo tenga que aprender a comprimir el rango HU.
+
 ## Muestreo y aumentación
 
 ::: {.columns}
@@ -343,6 +353,12 @@ flowchart LR
 - $\text{neighbor_context} = 2$ ⇒ **5 cortes** con **3 ventanas HU** = **15 canales**.
 - **Padding por replicación** en los bordes (no ceros artificiales).
 
+## Neighbor stacking — vista esquemática
+
+![Para predecir el corte $z$ se apilan sus vecinos $z\pm 2$ y se procesan como un único tensor 2D.](imgs/neighbor_stacking_iso.png){width=72%}
+
+El contexto axial entra **por la entrada del modelo**, no se infiere a posteriori. Cada predicción nace ya con información de profundidad sin pagar el coste de un Conv3D.
+
 ## Encoder ViT pre-entrenado
 
 `vit_base_patch16_224.mae` vía `timm` [@wightman2019timm], pre-entrenado con MAE [@he2022mae].
@@ -360,6 +376,12 @@ flowchart LR
 ```
 
 Se preserva la **distribución inicial de activaciones** y el conocimiento pre-entrenado del primer kernel.
+
+## Pesos del primer Conv: cómo se preserva el MAE
+
+![Pesos RGB pre-entrenados → promedio de canales → replicación a 15 canales escalada por $3/15$.](imgs/weight_adaptation.png){width=88%}
+
+Reinicializar el `patch_embed` desde aleatorio destruiría la inicialización MAE. Promediar y replicar conserva los detectores de bordes y orientaciones ya aprendidos; el factor $3/15$ mantiene la varianza de activación esperada por las capas posteriores.
 
 ## Decoder y supervisión profunda
 
@@ -437,6 +459,12 @@ $$
 El exponente focal desplaza atención hacia bordes irregulares y zonas con densidad parecida al tumor.
 :::
 :::
+
+## Paisaje de la pérdida Focal Tversky
+
+![Configuración simétrica $\alpha=\beta=0.5$, $\gamma=1$ (≈ Dice loss) vs configuración clínica activa $\alpha=0.3$, $\beta=0.7$, $\gamma=4/3$.](imgs/focal_tversky_landscape.png){width=78%}
+
+A igualdad de magnitud de error, **perder tumor (FN) cuesta más que sobredelimitarlo (FP)**: la pendiente del paisaje es más pronunciada en el eje FN. El exponente focal $\gamma > 1$ inclina aún más la pérdida hacia las zonas difíciles.
 
 ## Configuración de entrenamiento (`local_5060`)
 
@@ -516,6 +544,15 @@ Más robusta que Hausdorff máxima ante outliers, captura calidad de **bordes**.
 
 > Dos máscaras pueden tener Dice parecido pero HD95 muy distinto. Monitorizar ambas evita lecturas incompletas.
 
+## Dice y HD95 no miden lo mismo
+
+![Dice ≈ idéntico, HD95 muy distinto: un FP distante penaliza el borde.](imgs/dice_vs_hd95.png){width=78%}
+
+- **A:** error pegado al tumor → Dice $0.945$, HD95 = **1.6 mm**.
+- **B:** mismo overlap pero un FP lejano → Dice $0.938$, HD95 = **61 mm**.
+
+Por eso reportamos siempre las dos métricas a la vez.
+
 ## Checkpoints ligeros
 
 ```{mermaid}
@@ -564,6 +601,12 @@ flowchart LR
 ```
 
 **Por qué no deslizar en Z:** romper el contexto axial impediría construir los vecinos de cada corte.
+
+## Sliding window XY + chunking en Z (vista)
+
+![La ventana se desplaza solo en XY; el eje Z se preserva íntegro y se trocea en chunks de 32 cortes.](imgs/sliding_window_inference.png){width=85%}
+
+Si deslizásemos también en Z, los cortes de los bordes de cada ventana no tendrían vecinos suficientes. El chunking del encoder acota la VRAM **sin alterar el resultado numérico** del forward.
 
 ## Chunking del encoder
 

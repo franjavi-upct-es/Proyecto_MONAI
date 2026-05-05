@@ -105,6 +105,10 @@ En CT no existe una única normalización válida para todos los tejidos. Por es
 
 La transformación `MultiWindowHUd` se aplica después del muestreo de parches en entrenamiento. Este detalle es práctico pero importante: si se guardasen tres canales completos en `CacheDataset`, la memoria RAM se triplicaría. En el diseño actual se cachea un solo canal HU y se crean las tres ventanas únicamente cuando el sample ya está recortado o cuando se procesa un volumen de validación.
 
+![Las tres ventanas HU aplicadas al mismo corte axial. Cada normalización destaca un tejido distinto: pulmón ($[-1000, 0]$ HU) realza parénquima y bordes lesión-pulmón, mediastino ($[-150, 250]$ HU) muestra tumor sólido y tejidos blandos, y la ventana completa ($[-1024, 400]$ HU) preserva el contexto anatómico global. Los histogramas inferiores indican qué franja de la distribución HU selecciona cada ventana.](imgs/hu_windows.png){#fig-hu-windows width=85%}
+
+Como ilustra la @fig-hu-windows, ninguna ventana captura por sí sola toda la información clínicamente relevante: el contraste entre lesión y parénquima vive en una franja muy distinta a la del tumor sólido frente a tejidos blandos. Apilarlas como tres canales le permite al ViT atender simultáneamente a las tres escalas, sin obligar al modelo a aprender por su cuenta una compresión dinámica del rango HU.
+
 ## Muestreo y Aumentación
 
 El entrenamiento usa `RandCropByPosNegLabeld` con parches de `96 x 96 x 16` en el perfil local. El sampler favorece parches positivos con ratio `pos:neg = 3:1`, porque la lesión ocupa una fracción mínima del volumen total. Sin este sesgo, muchos lotes no contendrían tumor y el gradiente estaría dominado por fondo.
@@ -135,6 +139,10 @@ $$
 
 En los bordes del volumen se usa padding por replicación: el primer corte reutiliza vecinos inexistentes como copias del borde, evitando introducir ceros artificiales.
 
+![Esquema del **neighbor stacking**: para predecir el corte $z$ se apilan sus vecinos $z-2,\ldots,z+2$ y se procesan como un único tensor 2D con $5 \times 3 = 15$ canales. En los bordes del volumen el padding replica el corte más próximo en lugar de rellenar con ceros, evitando inyectar señales artificiales en la entrada del encoder.](imgs/neighbor_stacking_iso.png){#fig-neighbor-stacking width=80%}
+
+La @fig-neighbor-stacking aclara cómo se traslada el contexto axial al encoder 2D: en lugar de pedirle al modelo que infiera la coherencia entre cortes a posteriori, se la entregamos directamente en la entrada. Cada predicción nace ya con información de profundidad sin pagar el coste de una convolución 3D.
+
 ## Flujo de Tensores
 
 El flujo principal es:
@@ -159,6 +167,10 @@ El problema técnico es que ViT espera imágenes RGB de 3 canales, mientras que 
 4. Se escala por `3 / 15` para conservar la magnitud esperada de activación.
 
 Con esto se preserva el conocimiento pre-entrenado en el encoder y se adapta la entrada médica multicanal sin romper la distribución inicial de activaciones.
+
+![Adaptación del primer `Conv2d` de `patch_embed`. A la izquierda, los pesos RGB pre-entrenados con MAE (tres canales por filtro); en el centro, su promedio canal a canal; a la derecha, la replicación a 15 canales escalada por $3/15$ para preservar la magnitud de activación esperada por las capas posteriores.](imgs/weight_adaptation.png){#fig-weight-adaptation width=100%}
+
+Como muestra la @fig-weight-adaptation, este truco evita reinicializar el primer kernel desde una distribución aleatoria y conserva los detectores de bordes y orientaciones que el ViT ya había aprendido sobre imágenes naturales. Reinicializar destruiría la inicialización MAE y obligaría a re-aprender desde cero filtros de bajo nivel que también son útiles en CT; el factor $3/15$ es el ajuste de escala mínimo para que la varianza de activación tras el `Conv` siga en el mismo régimen que durante el pre-entrenamiento.
 
 ## Decoder y Supervisión Profunda
 
@@ -203,6 +215,10 @@ En la configuración activa:
 
 El parámetro $\beta$ mayor que $\alpha$ penaliza más los falsos negativos que los falsos positivos. En oncología, perder parte de una lesión puede ser más problemático que sobredelimitar ligeramente el borde. El exponente focal desplaza atención hacia regiones difíciles, como bordes irregulares y zonas donde el tumor toca tejidos de densidad parecida.
 
+![Paisaje de la pérdida Focal Tversky en el plano (FP, FN). Izquierda: configuración simétrica $\alpha=\beta=0.5$, $\gamma=1$ (equivalente a Dice loss). Derecha: configuración clínica activa $\alpha=0.3$, $\beta=0.7$, $\gamma=4/3$, donde un mismo número de falsos negativos cuesta más que el mismo número de falsos positivos.](imgs/focal_tversky_landscape.png){#fig-focal-tversky width=95%}
+
+La @fig-focal-tversky deja explícita la asimetría que perseguimos: a igualdad de magnitud de error, perder tumor (FN) recibe un gradiente más intenso que sobredelimitarlo (FP), tal como se ve en la diferencia de pendiente entre los dos ejes del panel derecho. El exponente focal $\gamma > 1$ además inclina el paisaje hacia las zonas difíciles, atenuando la actualización donde el modelo ya acierta y reforzándola en bordes mal segmentados.
+
 # Entrenamiento
 
 ## Configuración Base
@@ -239,6 +255,10 @@ Las métricas principales son:
 - **Dice de foreground:** mide solapamiento entre predicción y máscara tumoral.
 - **HD95:** distancia Hausdorff al percentil 95, más robusta que la Hausdorff máxima ante outliers.
 
+![Dos predicciones con Dice prácticamente idéntico ($0.945$ vs $0.938$) pero HD95 muy distinto ($1.6$ mm vs $61.0$ mm). En **A** todo el error está concentrado cerca del tumor; en **B** aparece un pequeño falso positivo distante que apenas afecta al solapamiento volumétrico, pero degrada drásticamente la distancia de borde.](imgs/dice_vs_hd95.png){#fig-dice-vs-hd95 width=95%}
+
+La @fig-dice-vs-hd95 explica por qué reportamos las dos métricas en paralelo: Dice es un solapamiento volumétrico robusto pero ciego a errores espacialmente lejanos, mientras que HD95 castiga precisamente ese tipo de fallo. En segmentación tumoral, un falso positivo aislado puede ser inofensivo (Dice apenas baja) o clínicamente relevante (HD95 se dispara), y solo combinando ambas métricas podemos distinguir un caso del otro.
+
 El entrenador escribe `metrics.csv`, `summary.json`, `best.pt` y, si está habilitado, visualizaciones post-entrenamiento. También genera `metrics.png` con pérdida, Dice y HD95.
 
 ## Checkpoints Ligeros
@@ -260,6 +280,10 @@ El flujo es:
 5. Recomponer logits y tomar la clase con mayor probabilidad.
 
 El chunking del encoder es clave. En validación, un volumen puede tener alrededor de 200 cortes; pasar todos como batch interno por ViT-Base puede saturar VRAM. Trocear el batch interno no cambia el resultado numérico, pero limita la memoria máxima.
+
+![Inferencia volumétrica con `ViT25D`. Izquierda: la ventana deslizante recorre únicamente el plano $XY$, manteniendo la profundidad completa $D$ para no romper el contexto axial. Derecha: el batch interno de cortes ($\sim 200$) se trocea en chunks de hasta `encoder_chunk_size = 32` antes de pasar por el ViT, acotando el pico de VRAM sin alterar el resultado numérico.](imgs/sliding_window_inference.png){#fig-sliding-window width=95%}
+
+La @fig-sliding-window resume la diferencia frente a una sliding window 3D estándar: si deslizásemos también en $Z$, los primeros y últimos cortes de cada ventana no tendrían vecinos suficientes para construir el stack de cinco cortes, y el chunking del encoder dejaría de ser equivalente al forward completo. Mantener $Z$ íntegro y trocear solo el batch interno preserva la equivalencia numérica con un forward sin chunks.
 
 La CLI de predicción es:
 
