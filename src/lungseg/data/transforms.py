@@ -49,9 +49,9 @@ _CROP_METADATA_KEYS = ["foreground_start_coord", "foreground_end_coord"]
 _AUG_PROB = {"none": 0.0, "standard": 0.15, "aggressive": 0.30}
 
 _DEFAULT_HU_WINDOWS: tuple[tuple[float, float], ...] = (
-    (-1000.0, 0.0),     # pulmón
-    (-150.0, 250.0),    # mediastino
-    (-1024.0, 400.0),   # completa
+    (-1000.0, 0.0),  # pulmón
+    (-150.0, 250.0),  # mediastino
+    (-1024.0, 400.0),  # completa
 )
 
 LUNG_MASK_PATH_KEY = "lung_mask_path"
@@ -161,8 +161,7 @@ class MultiWindowHUd(MapTransform, RandomizableTrait):
             tensor = image.as_tensor() if hasattr(image, "as_tensor") else image
             if tensor.ndim != 4 or tensor.shape[0] != 1:
                 raise ValueError(
-                    f"MultiWindowHUd espera (1, H, W, D) en {key!r}, "
-                    f"recibió {tuple(tensor.shape)}"
+                    f"MultiWindowHUd espera (1, H, W, D) en {key!r}, recibió {tuple(tensor.shape)}"
                 )
             base = tensor[0].to(torch.float32)
             channels = []
@@ -189,16 +188,10 @@ def _check_no_lr_flip(transforms: list) -> None:
         if isinstance(tr, RandFlipd):
             axis = tr.flipper.spatial_axis
             if axis is None:
-                raise ValueError(
-                    "RandFlipd without spatial_axis flips all axes, including LR. "
-                    "Forbidden on chest CT (CLAUDE.md hard rule)."
-                )
+                raise ValueError("RandFlipd without spatial_axis flips all axes, including LR. ")
             axes = (axis,) if isinstance(axis, int) else tuple(axis)
             if 0 in axes:
-                raise ValueError(
-                    "RandFlipd spatial_axis=0 (LR) is forbidden on chest CT "
-                    "(CLAUDE.md hard rule). Use spatial_axis=2 only."
-                )
+                raise ValueError("RandFlipd spatial_axis=0 (LR) is forbidden on chest CT ")
 
 
 def _hu_windows_from_cfg(cfg: DictConfig) -> tuple[tuple[float, float], ...]:
@@ -299,10 +292,8 @@ def build_val_transforms(cfg: DictConfig, with_label: bool = True) -> Compose:
     keys = list(KEYS) if with_label else ["image"]
     # MultiWindowHUd hereda de RandomizableTrait, así que CacheDataset NO lo
     # cachea: el volumen guardado en RAM mantiene 1 canal.
-    return Compose(
-        [
-            *_pre_transforms(cfg, with_label=with_label),
-            MultiWindowHUd(keys=["image"], windows=_hu_windows_from_cfg(cfg)),
-            EnsureTyped(keys=[*keys, *_CROP_METADATA_KEYS], allow_missing_keys=True),
-        ]
-    )
+    return Compose([
+        *_pre_transforms(cfg, with_label=with_label),
+        MultiWindowHUd(keys=["image"], windows=_hu_windows_from_cfg(cfg)),
+        EnsureTyped(keys=[*keys, *_CROP_METADATA_KEYS], allow_missing_keys=True),
+    ])
