@@ -11,7 +11,7 @@ Pipeline (refactor 2.5D):
 - Aumentos controlados por cfg.training.augment_regime; RandFlipd solo en Z.
 
 Reglas defensivas: `_check_no_lr_flip` aborta si una config introduce
-RandFlipd con `spatial_axis=0` (LR), prohibido por CLAUDE.md.
+RandFlipd con `spatial_axis=0` (LR).
 """
 
 from __future__ import annotations
